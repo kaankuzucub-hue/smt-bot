@@ -45,9 +45,13 @@ try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         data = {"chat_id": CHAT_ID, "text": message, "parse_mode": "Markdown"}
         try: 
-            requests.post(url, data=data)
+            response = requests.post(url, data=data)
+            if response.status_code != 200:
+                print(f"!!! Telegram API Hatası: {response.text}")
+            else:
+                print(">>> Mesaj başarıyla Telegram'a iletildi.")
         except Exception as e: 
-            print(f"!!! Telegram Hatası: {e}")
+            print(f"!!! Telegram Bağlantı Hatası: {e}")
 
     # --- ZAMAN KONTROLÜ ---
     def get_ny_time():
@@ -59,16 +63,24 @@ try:
         now_ny = get_ny_time().time()
         return time(9, 30) <= now_ny <= time(11, 30)
 
-    # --- YENİ: SİSTEM OKEY MESAJI (HER ÇALIŞMADA ATAR) ---
+    # --- YENİ: SİSTEM OKEY MESAJI ---
     def send_system_ok_message():
         now = get_ny_time()
         msg = (f"🟢 **SİSTEM OKEY** 🟢\n"
                f"🕒 NY Saati: `{now.strftime('%H:%M')}`\n"
                f"✅ Bot: Çalışıyor\n"
                f"📡 Bağlantı: Başarılı")
-        # Bu mesajı her seferinde at:
         send_telegram(msg)
-        print(">>> Sistem OKEY mesajı gönderildi.")
+
+    # --- YARDIMCI: GÜVENLİ VERİ DÖNÜŞTÜRME ---
+    def safe_float(val):
+        """Pandas Series veya tekil değeri float'a çevirir"""
+        try:
+            if isinstance(val, pd.Series):
+                return float(val.iloc[0])
+            return float(val)
+        except:
+            return 0.0
 
     # --- BÖLÜM 1: 1 YILLIK VERİ İLE İSTATİSTİK ANALİZİ ---
     def analyze_market_regime():
@@ -87,7 +99,15 @@ try:
         scalp_down = np.percentile(df['Down_Move'].dropna(), SCALP_PERCENTILE)
         
         today = df.iloc[-1]
-        change_pct = (today['Close'] - today['Open']) / today['Open']
+        
+        # --- KRİTİK DÜZELTME BURADA YAPILDI ---
+        # yfinance bazen Series döndürdüğü için safe_float ile sayıya zorluyoruz
+        close_p = safe_float(today['Close'])
+        open_p = safe_float(today['Open'])
+        
+        if open_p == 0: change_pct = 0
+        else: change_pct = (close_p - open_p) / open_p
+        # ---------------------------------------
         
         status = "NORMAL"
         if change_pct > 0:
@@ -99,7 +119,7 @@ try:
             elif down > scalp_down: status = "SCALP_LONG_ZONE"
             
         print(f">>> Piyasa Durumu: {status} (%{change_pct*100:.2f})")
-        return change_pct, status, today['Close']
+        return change_pct, status, close_p
 
     # --- BÖLÜM 2: SMT TARAYICI ---
     def get_data(symbol, interval):
@@ -108,9 +128,16 @@ try:
 
     def find_swings(df, order):
         if df is None or len(df) < 10: return None, None
-        df['min'] = df.iloc[argrelextrema(df['Close'].values, np.less_equal, order=order)[0]]['Close']
-        df['max'] = df.iloc[argrelextrema(df['Close'].values, np.greater_equal, order=order)[0]]['Close']
-        return df['min'].dropna(), df['max'].dropna()
+        
+        # NumPy array'e çevirerek işlem yap (Hata önleyici)
+        close_vals = df['Close'].values.flatten() # Düzleştir
+        
+        mins = argrelextrema(close_vals, np.less_equal, order=order)[0]
+        maxs = argrelextrema(close_vals, np.greater_equal, order=order)[0]
+        
+        if len(mins) == 0 or len(maxs) == 0: return None, None
+        
+        return df.iloc[mins]['Close'], df.iloc[maxs]['Close']
 
     def scan_smt_for_set(set_key, timeframe, market_status, market_change):
         config = SMT_CONFIG[set_key]
@@ -131,11 +158,14 @@ try:
         lows, highs = find_swings(df_ref, order)
         if lows is None or len(lows) < 2 or len(highs) < 2: return
 
-        data_store["REF"] = {
-            "L_new": lows.iloc[-1], "L_old": lows.iloc[-2],
-            "H_new": highs.iloc[-1], "H_old": highs.iloc[-2],
-            "Price": df_ref['Close'].iloc[-1]
-        }
+        # Değerleri güvenli sayıya çevir
+        try:
+            data_store["REF"] = {
+                "L_new": safe_float(lows.iloc[-1]), "L_old": safe_float(lows.iloc[-2]),
+                "H_new": safe_float(highs.iloc[-1]), "H_old": safe_float(highs.iloc[-2]),
+                "Price": safe_float(df_ref['Close'].iloc[-1])
+            }
+        except: return
 
         # Karşılaştırma
         for sym in comp_tickers:
@@ -143,10 +173,12 @@ try:
             if df_c is None: continue
             l, h = find_swings(df_c, order)
             if l is not None and len(l) >= 2 and len(h) >= 2:
-                data_store[sym] = {
-                    "L_new": l.iloc[-1], "L_old": l.iloc[-2],
-                    "H_new": h.iloc[-1], "H_old": h.iloc[-2]
-                }
+                try:
+                    data_store[sym] = {
+                        "L_new": safe_float(l.iloc[-1]), "L_old": safe_float(l.iloc[-2]),
+                        "H_new": safe_float(h.iloc[-1]), "H_old": safe_float(h.iloc[-2])
+                    }
+                except: continue
             else:
                 return 
 
