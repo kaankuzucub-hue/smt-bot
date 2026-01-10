@@ -27,7 +27,7 @@ TF_MICRO = "5m"
 TF_SCALP = "15m"
 TF_SWING = "1h"
 
-# --- İSTATİSTİKSEL EŞİKLER (%80 - %95 KURALI İÇİN) ---
+# --- İSTATİSTİKSEL EŞİKLER ---
 SCALP_PERCENTILE = 75  
 SWING_PERCENTILE = 90  
 
@@ -39,19 +39,39 @@ def send_telegram(message):
     except: pass
 
 # --- ZAMAN KONTROLÜ ---
-def is_micro_scalp_time():
-    """ 
-    Sadece 09:30 - 11:30 (New York Saati) arasında TRUE döner.
-    Bu saatler dışında 5 dakikalık grafik taranmaz.
-    """
+def get_ny_time():
     ny_tz = pytz.timezone('America/New_York')
-    now_ny = datetime.now(ny_tz).time()
+    return datetime.now(ny_tz)
+
+def is_micro_scalp_time():
+    """ 09:30 - 11:30 NY Saati """
+    now_ny = get_ny_time().time()
+    return time(9, 30) <= now_ny <= time(11, 30)
+
+def is_market_open():
+    """ Haftasonu kontrolü ve Piyasa saati """
+    now = get_ny_time()
+    # Haftasonu ise (5=Cmt, 6=Paz) False dön
+    if now.weekday() >= 5: return False
+    # Saat kontrolü (09:30 - 16:00)
+    return time(9, 30) <= now.time() <= time(16, 00)
+
+# --- YENİ: GÜNLÜK İYİ GÜNLER MESAJI (KALP ATIŞI) ---
+def daily_weekend_check():
+    now = get_ny_time()
     
-    # 09:30 ile 11:30 arası mı?
-    start = time(9, 30)
-    end = time(11, 30)
-    
-    return start <= now_ny <= end
+    # Sadece Haftasonları (Cumartesi veya Pazar)
+    if now.weekday() >= 5:
+        # Sadece Sabah 09:00 - 09:05 arasında (Günde 1 kez)
+        # GitHub Actions 5 dakikada bir çalıştığı için bu aralığı mutlaka yakalar.
+        if now.hour == 9 and 0 <= now.minute < 5:
+            msg = (f"☀️ **MUTLU HAFTASONLARI!** ☀️\n\n"
+                   f"🤖 **Durum:** Bot Aktif ve Çalışıyor.\n"
+                   f"💤 **Piyasa:** Kapalı (Haftasonu Modu).\n"
+                   f"🔋 **Sistem:** Sorunsuz.\n\n"
+                   f"Pazartesi açılışta görüşmek üzere! 👋")
+            send_telegram(msg)
+            print("Günlük haftasonu mesajı gönderildi.")
 
 # --- BÖLÜM 1: 1 YILLIK VERİ İLE İSTATİSTİK ANALİZİ ---
 def analyze_market_regime():
@@ -86,7 +106,6 @@ def analyze_market_regime():
 # --- BÖLÜM 2: SMT TARAYICI ---
 def get_data(symbol, interval):
     try:
-        # 5m için son 1 gün, diğerleri için 5 gün veri çek
         p = "1d" if interval == "5m" else "5d"
         return yf.download(symbol, period=p, interval=interval, progress=False)
     except:
@@ -104,7 +123,6 @@ def scan_smt_for_set(set_key, timeframe, market_status, market_change):
     comp_tickers = config["comps"]
     strategy_name = config["name"]
     
-    # Zaman dilimine göre hassasiyet
     if timeframe == "5m": order = 1
     elif timeframe == "15m": order = 2
     else: order = 3
@@ -146,7 +164,6 @@ def scan_smt_for_set(set_key, timeframe, market_status, market_change):
         
         if divergences:
             icon = "🔬" if timeframe == "5m" else "⚡" if timeframe == "15m" else "🚨"
-            
             comment = "Nötr (Teknik)"
             if "SHORT_ZONE" in market_status: comment = "🔥 GÜÇLÜ FIRSAT (İstatistik Onaylı)"
             elif "LONG_ZONE" in market_status: comment = "⚠️ TERS YÖN (Riskli)"
@@ -167,7 +184,6 @@ def scan_smt_for_set(set_key, timeframe, market_status, market_change):
         
         if divergences:
             icon = "🔬" if timeframe == "5m" else "⚡" if timeframe == "15m" else "🚨"
-            
             comment = "Nötr (Teknik)"
             if "LONG_ZONE" in market_status: comment = "🔥 GÜÇLÜ FIRSAT (İstatistik Onaylı)"
             elif "SHORT_ZONE" in market_status: comment = "⚠️ TERS YÖN (Riskli)"
@@ -185,26 +201,31 @@ def scan_smt_for_set(set_key, timeframe, market_status, market_change):
 # --- ANA ÇALIŞTIRMA BLOĞU ---
 if __name__ == "__main__":
     
-    # 1. Adım: Piyasa İstatistiğini Çek (Her zaman çalışır)
-    m_change, m_status, m_price = analyze_market_regime()
+    # 1. GÜNLÜK KALP ATIŞI (HAFTASONU KONTROLÜ)
+    daily_weekend_check()
     
-    strategies = ["SET_1", "SET_2", "SET_3"]
+    # 2. PİYASA AÇIK MI?
+    # Eğer haftasonuysa veya piyasa kapalıysa aşağıyı çalıştırma, kaynak tüketme.
+    if not is_market_open():
+        # EĞER MANUEL OLARAK TEST EDİYORSAN (GitHub'dan butona bastıysan)
+        # Buraya küçük bir test mesajı ekleyebiliriz ki çalıştığını gör.
+        # Ama otomatik döngüde spam yapmasın diye kapalı tutuyoruz.
+        print("Piyasa Kapalı. Dinlenme Modu.")
     
-    # 2. Adım: MİKRO SCALP (5m) Kontrolü
-    # Sadece 09:30-11:30 arasında çalışır.
-    if is_micro_scalp_time():
-        print(">> Mikro Scalp Saati (09:30-11:30): 5m Taranıyor...")
-        for strat in strategies:
-            try: scan_smt_for_set(strat, TF_MICRO, m_status, m_change)
-            except: pass
     else:
-        print(">> Mikro Scalp Saati Değil. 5m Atlanıyor.")
+        # Piyasa Açıksa Analize Başla
+        m_change, m_status, m_price = analyze_market_regime()
+        strategies = ["SET_1", "SET_2", "SET_3"]
+        
+        # MİKRO SCALP (09:30-11:30)
+        if is_micro_scalp_time():
+            for strat in strategies:
+                try: scan_smt_for_set(strat, TF_MICRO, m_status, m_change)
+                except: pass
 
-    # 3. Adım: SCALP (15m) ve SWING (1h) Kontrolü
-    # Burası HER ZAMAN çalışır (Zaman kısıtlaması yok).
-    print(">> Genel Tarama (15m & 1h) Yapılıyor...")
-    for strat in strategies:
-        try: scan_smt_for_set(strat, TF_SCALP, m_status, m_change)
-        except: pass
-        try: scan_smt_for_set(strat, TF_SWING, m_status, m_change)
-        except: pass
+        # GENEL TARAMA
+        for strat in strategies:
+            try: scan_smt_for_set(strat, TF_SCALP, m_status, m_change)
+            except: pass
+            try: scan_smt_for_set(strat, TF_SWING, m_status, m_change)
+            except: pass
