@@ -1,0 +1,28 @@
+name: SMT Bot Calistirici
+
+on:
+  schedule:
+    # Her 5 dakikada bir çalıştırır
+    - cron: '*/5 * * * *'
+  workflow_dispatch: # Manuel çalıştırma butonu ekler
+
+jobs:
+  piyasa-kontrol:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Kodlari Cek
+        uses: actions/checkout@v3
+
+      - name: Python Kurulumu
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Kutuphaneleri Yukle
+        run: pip install -r requirements.txt
+
+      - name: Botu Baslat
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+        run: python main.py
