@@ -25,25 +25,34 @@ try:
 
     # --- SMT CONFIGURATION ---
     SMT_CONFIG = {
-        # SET 1: TQQQ TRIO
+        # SET 1: TQQQ TRIO (Klasik)
         "SET_1": {
             "type": "standard",
             "name": "🔥 TQQQ TRIO",
             "ref": "TQQQ", 
             "comps": ["SOXL", "NVDA"] 
         },
-        # SET 2: TQQQ DUO
+        # SET 2: TQQQ DUO (Klasik)
         "SET_2": {
             "type": "standard",
             "name": "⚖️ TQQQ SEMI DUO",
             "ref": "TQQQ",
             "comps": ["SOXL"]
         },
-        # SET 3: CHIP CLUSTER (HİSSE MATRIX)
+        # SET 3: CHIP CLUSTER (Hisse Matrix)
         "SET_3": {
             "type": "cluster",
             "name": "⚔️ CHIP WARS (Matrix)",
             "peers": ["NVDA", "AVGO", "MU"] 
+        },
+        # SET 4: SECTOR X-RAY (YENİ - ETF ANALİZİ)
+        # TQQQ Yükselirken Alt Sektörler (XLK, XLC, XLY, SMH) Destekliyor mu?
+        "SET_4": {
+            "type": "standard", # Lider: TQQQ
+            "name": "🏥 SECTOR X-RAY",
+            "ref": "TQQQ",
+            # Teknoloji, İletişim, Tüketim, Yarı İletken
+            "comps": ["XLK", "XLC", "XLY", "SMH"] 
         }
     }
 
@@ -80,7 +89,7 @@ try:
         msg = (f"🟢 **SYSTEM OPERATIONAL** 🟢\n"
                f"🕒 NY Time: `{now.strftime('%H:%M')}`\n"
                f"✅ Bot: Active\n"
-               f"📡 Mode: ACTION SIGNAL READY")
+               f"📡 Mode: SECTOR X-RAY ADDED")
         send_telegram(msg)
 
     # --- HELPERS ---
@@ -156,7 +165,7 @@ try:
         if is_opening_range(): time_header = "🌅 **OPENING RANGE SNIPER**"
         else: time_header = "⚡ **INTRADAY SCAN**"
 
-        # --- LOGIC A: CLUSTER MODE (HİSSE MATRIX) ---
+        # --- LOGIC A: CLUSTER MODE (HİSSE MATRIX - AYNI) ---
         if strategy_type == "cluster":
             peers = config["peers"]
             peer_data = {}
@@ -177,57 +186,44 @@ try:
             for s1, s2 in combinations(peer_data.keys(), 2):
                 d1, d2 = peer_data[s1], peer_data[s2]
                 
-                # --- BEARISH CLUSTER SMT (TEPELERDE UYUMSUZLUK) ---
-                is_bearish = False
-                leader, laggard = "", ""
-                
+                # Bearish
                 if d1["H_new"] > d1["H_old"] and d2["H_new"] < d2["H_old"]:
                     if (d1["Last_Bar"] - d1["H_idx"] <= FRESHNESS_LIMIT):
-                        is_bearish = True
-                        leader, laggard = s1, s2
+                        msg = (f"{time_header}\n⚔️ **CHIP WAR ({s1} vs {s2})**\n\n"
+                               f"🚨 **ACTION: SHORT** 📉\n"
+                               f"------------------------\n"
+                               f"💪 **Strong:** {s1} (HH)\n🛑 **Weak:** {s2} (LH)\n"
+                               f"⏱️ **TF:** {timeframe}\n🧠 Divergence in Sector")
+                        send_telegram(msg)
                 elif d2["H_new"] > d2["H_old"] and d1["H_new"] < d1["H_old"]:
                     if (d2["Last_Bar"] - d2["H_idx"] <= FRESHNESS_LIMIT):
-                        is_bearish = True
-                        leader, laggard = s2, s1
+                        msg = (f"{time_header}\n⚔️ **CHIP WAR ({s2} vs {s1})**\n\n"
+                               f"🚨 **ACTION: SHORT** 📉\n"
+                               f"------------------------\n"
+                               f"💪 **Strong:** {s2} (HH)\n🛑 **Weak:** {s1} (LH)\n"
+                               f"⏱️ **TF:** {timeframe}\n🧠 Divergence in Sector")
+                        send_telegram(msg)
                 
-                if is_bearish:
-                    # MESAJI NETLEŞTİRDİM: ACTION SHORT EKLENDİ
-                    msg = (f"{time_header}\n"
-                           f"⚔️ **CHIP WAR ({s1} vs {s2})**\n\n"
-                           f"🚨 **ACTION: SHORT** 📉\n"
-                           f"------------------------\n"
-                           f"💪 **Strong:** {leader} (HH)\n"
-                           f"🛑 **Weak:** {laggard} (LH)\n"
-                           f"⏱️ **TF:** {timeframe}\n"
-                           f"🧠 **Reason:** Bearish Divergence")
-                    send_telegram(msg)
-
-                # --- BULLISH CLUSTER SMT (DİPLERDE UYUMSUZLUK) ---
-                is_bullish = False
-                
+                # Bullish
                 if d1["L_new"] < d1["L_old"] and d2["L_new"] > d2["L_old"]:
                     if (d1["Last_Bar"] - d1["L_idx"] <= FRESHNESS_LIMIT):
-                        is_bullish = True
-                        leader, laggard = s1, s2
+                        msg = (f"{time_header}\n⚔️ **CHIP WAR ({s1} vs {s2})**\n\n"
+                               f"🚨 **ACTION: LONG** 🚀\n"
+                               f"------------------------\n"
+                               f"📉 **Sweeping:** {s1} (LL)\n🛡️ **Holding:** {s2} (HL)\n"
+                               f"⏱️ **TF:** {timeframe}\n🧠 Divergence in Sector")
+                        send_telegram(msg)
                 elif d2["L_new"] < d2["L_old"] and d1["L_new"] > d1["L_old"]:
                     if (d2["Last_Bar"] - d2["L_idx"] <= FRESHNESS_LIMIT):
-                        is_bullish = True
-                        leader, laggard = s2, s1
-                
-                if is_bullish:
-                    # MESAJI NETLEŞTİRDİM: ACTION LONG EKLENDİ
-                    msg = (f"{time_header}\n"
-                           f"⚔️ **CHIP WAR ({s1} vs {s2})**\n\n"
-                           f"🚨 **ACTION: LONG** 🚀\n"
-                           f"------------------------\n"
-                           f"📉 **Sweeping:** {leader} (LL)\n"
-                           f"🛡️ **Holding:** {laggard} (HL)\n"
-                           f"⏱️ **TF:** {timeframe}\n"
-                           f"🧠 **Reason:** Bullish Divergence")
-                    send_telegram(msg)
+                        msg = (f"{time_header}\n⚔️ **CHIP WAR ({s2} vs {s1})**\n\n"
+                               f"🚨 **ACTION: LONG** 🚀\n"
+                               f"------------------------\n"
+                               f"📉 **Sweeping:** {s2} (LL)\n🛡️ **Holding:** {s1} (HL)\n"
+                               f"⏱️ **TF:** {timeframe}\n🧠 Divergence in Sector")
+                        send_telegram(msg)
 
 
-        # --- LOGIC B: STANDARD MODE (TQQQ - RSI ZONES) ---
+        # --- LOGIC B: STANDARD MODE (TQQQ/SECTOR X-RAY) ---
         else:
             ref_ticker = config["ref"]
             comp_tickers = config["comps"]
@@ -242,6 +238,7 @@ try:
 
             last_candle_idx = len(df_ref) - 1
             
+            # Get RSI at Swing Points
             try:
                 rsi_new_high = safe_float(rsi_series.iloc[h_idx[-1]])
                 rsi_old_high = safe_float(rsi_series.iloc[h_idx[-2]])
@@ -272,7 +269,7 @@ try:
                         }
                     except: continue
 
-            # --- BEARISH CHECK (SHORT) ---
+            # --- BEARISH SMT CHECK ---
             if data_store["REF"]["H_new"] > data_store["REF"]["H_old"]:
                 bars_ago = last_candle_idx - data_store["REF"]["H_idx"]
                 if bars_ago <= FRESHNESS_LIMIT:
@@ -291,20 +288,19 @@ try:
                         else:
                             final_header = f"⚡ **STANDARD SMT**"
                             rsi_msg = f"RSI: {rsi_new_high:.0f} (No Div)"
-                            comment = "Trend Exhaustion"
+                            comment = "Asset Divergence"
 
-                        # BURAYA DA ACTION: SHORT EKLENDİ
                         msg = (f"{time_header}\n{final_header}\n\n"
                                f"🚨 **ACTION: SHORT** 📉\n"
                                f"------------------------\n"
-                               f"📉 **Leader:** {ref_ticker} Higher High\n"
-                               f"🛑 **Laggard:** {', '.join(divs)}\n"
+                               f"📉 **Leader:** {ref_ticker} HH\n"
+                               f"🛑 **Weak Sectors:** {', '.join(divs)}\n"
                                f"🔋 **Momentum:** {rsi_msg}\n"
                                f"🕯️ **Freshness:** {bars_ago} bars\n"
                                f"🧠 {comment}\nPrice: {data_store['REF']['Price']:.2f}")
                         send_telegram(msg)
 
-            # --- BULLISH CHECK (LONG) ---
+            # --- BULLISH SMT CHECK ---
             elif data_store["REF"]["L_new"] < data_store["REF"]["L_old"]:
                 bars_ago = last_candle_idx - data_store["REF"]["L_idx"]
                 if bars_ago <= FRESHNESS_LIMIT:
@@ -323,14 +319,13 @@ try:
                         else:
                             final_header = f"⚡ **STANDARD SMT**"
                             rsi_msg = f"RSI: {rsi_new_low:.0f} (No Div)"
-                            comment = "Trend Reversal"
+                            comment = "Asset Divergence"
 
-                        # BURAYA DA ACTION: LONG EKLENDİ
                         msg = (f"{time_header}\n{final_header}\n\n"
                                f"🚨 **ACTION: LONG** 🚀\n"
                                f"------------------------\n"
-                               f"📈 **Leader:** {ref_ticker} Lower Low\n"
-                               f"💪 **Holding:** {', '.join(divs)}\n"
+                               f"📈 **Leader:** {ref_ticker} LL\n"
+                               f"💪 **Holding Sectors:** {', '.join(divs)}\n"
                                f"🔋 **Momentum:** {rsi_msg}\n"
                                f"🕯️ **Freshness:** {bars_ago} bars\n"
                                f"🧠 {comment}\nPrice: {data_store['REF']['Price']:.2f}")
@@ -343,7 +338,7 @@ try:
         m_change, m_status, m_price = analyze_market_regime()
         
         if m_status != "NO_DATA":
-            strategies = ["SET_1", "SET_2", "SET_3"]
+            strategies = ["SET_1", "SET_2", "SET_3", "SET_4"]
             
             if is_opening_range():
                 print(">>> Opening Range Scan...")
