@@ -59,7 +59,6 @@ def get_ny_time():
 
 def is_opening_range():
     now_ny = get_ny_time().time()
-    # Piyasalar kapalı olsa bile test için 24 saat açık bırakabiliriz ama kurala sadık kalalım
     return time(9, 30) <= now_ny <= time(11, 30)
 
 def send_system_ok_message():
@@ -67,7 +66,7 @@ def send_system_ok_message():
     msg = (f"🟢 **SYSTEM OPERATIONAL** 🟢\n"
            f"🕒 NY Time: `{now.strftime('%H:%M')}`\n"
            f"✅ Bot: Active\n"
-           f"🧠 Brain: MATH GOD (Armored)")
+           f"🛡️ Mode: TREND FILTER (Risky Alert)")
     send_telegram(msg)
 
 def safe_float(val):
@@ -79,19 +78,28 @@ def safe_float(val):
     except: return 0.0
 
 # ==========================================
+# 🧭 TREND BIAS FILTER (EMA 200)
+# ==========================================
+def check_trend_bias(df):
+    try:
+        if len(df) < 200: return "NEUTRAL"
+        ema200 = df['Close'].ewm(span=200, adjust=False).mean().iloc[-1]
+        current_price = safe_float(df['Close'].iloc[-1])
+        if current_price > ema200: return "BULLISH"
+        else: return "BEARISH"
+    except: return "NEUTRAL"
+
+# ==========================================
 # 🧠 LAYER 5: MATH GOD (SAFE MODE)
 # ==========================================
 def calculate_hurst(df, lags_count=20):
     try:
-        # Veriyi düzleştir (Flatten)
         ts = df['Close'].values.flatten()
-        if len(ts) < lags_count + 5: return "N/A (Data)"
-        
+        if len(ts) < lags_count + 5: return "N/A"
         lags = range(2, lags_count)
         tau = [np.sqrt(np.std(np.subtract(ts[lag:], ts[:-lag]))) for lag in lags]
         poly = np.polyfit(np.log(lags), np.log(tau), 1)
         hurst = poly[0] * 2.0
-        
         if hurst > 0.55: return f"🌊 **Trending ({hurst:.2f})**"
         elif hurst < 0.45: return f"🪃 **Mean Rev ({hurst:.2f})**"
         else: return f"🎲 **Random ({hurst:.2f})**"
@@ -101,22 +109,16 @@ def calculate_markov_prob(df):
     try:
         closes = df['Close'].pct_change().dropna().tail(100)
         if len(closes) < 10: return "N/A"
-        
         states = (closes > 0).astype(int)
         trans_mat = np.zeros((2, 2))
-        
         for i in range(len(states)-1):
-            curr = states.iloc[i]
-            next_s = states.iloc[i+1]
+            curr, next_s = states.iloc[i], states.iloc[i+1]
             trans_mat[curr][next_s] += 1
-            
         current_state = states.iloc[-1]
         row_sum = np.sum(trans_mat[current_state])
         if row_sum == 0: return "N/A"
-        
         prob_bull = (trans_mat[current_state][1] / row_sum) * 100
         prob_bear = (trans_mat[current_state][0] / row_sum) * 100
-        
         if prob_bull > 60: return f"🐂 **Bull Prob: %{prob_bull:.0f}**"
         elif prob_bear > 60: return f"🐻 **Bear Prob: %{prob_bear:.0f}**"
         else: return f"⚖️ **Neutral (%{prob_bull:.0f})**"
@@ -126,107 +128,58 @@ def calculate_fft_cycle(df):
     try:
         closes = df['Close'].values.flatten()
         if len(closes) < 30: return "N/A"
-        
-        # Detrend
-        linear_trend = np.linspace(closes[0], closes[-1], len(closes))
-        detrended = closes - linear_trend
-        
-        # FFT
+        detrended = closes - np.linspace(closes[0], closes[-1], len(closes))
         fft_vals = np.fft.rfft(detrended)
         magnitudes = np.abs(fft_vals)
-        # 0. index DC component, onu atla
         peak_freq_idx = np.argmax(magnitudes[1:]) + 1
-        
-        # Frekans hesabı (Güvenli)
         if peak_freq_idx == 0: return "N/A"
-        cycle_len = int(len(closes) / peak_freq_idx)
-        
-        return f"🔄 **Cycle: ~{cycle_len} Bars**"
+        return f"🔄 **Cycle: ~{int(len(closes) / peak_freq_idx)} Bars**"
     except: return "N/A"
 
 # ==========================================
-# 🏦 LAYER 4: INSTITUTIONAL FLOW (SAFE)
+# 🏦 LAYER 4 & 3 (SAFE)
 # ==========================================
 def calculate_z_score(df, period=20):
     try:
         closes = df['Close']
         if len(closes) < period: return "N/A"
-        
-        mean = closes.rolling(window=period).mean()
-        std = closes.rolling(window=period).std()
-        
-        curr = closes.iloc[-1]
-        m = mean.iloc[-1]
-        s = std.iloc[-1]
-        
-        if s == 0: return "N/A"
-        
-        z_score = (curr - m) / s
-        
-        if z_score > 3.0: return "🔥 **EXTREME (+3σ)**"
-        elif z_score < -3.0: return "💎 **EXTREME (-3σ)**"
-        elif z_score > 2.0: return "⚠️ **High (+2σ)**"
-        elif z_score < -2.0: return "♻️ **Low (-2σ)**"
-        else: return f"Neutral ({z_score:.1f}σ)"
+        z = (closes.iloc[-1] - closes.rolling(period).mean().iloc[-1]) / closes.rolling(period).std().iloc[-1]
+        if z > 3.0: return "🔥 **EXTREME (+3σ)**"
+        elif z < -3.0: return "💎 **EXTREME (-3σ)**"
+        elif z > 2.0: return "⚠️ **High (+2σ)**"
+        elif z < -2.0: return "♻️ **Low (-2σ)**"
+        else: return f"Neutral ({z:.1f}σ)"
     except: return "N/A"
 
 def calculate_mfi(df, period=14):
     try:
-        # Series kontrolü
-        high = df['High']
-        low = df['Low']
-        close = df['Close']
-        volume = df['Volume']
-        
-        typical_price = (high + low + close) / 3
-        money_flow = typical_price * volume
-        
-        delta = typical_price.diff()
-        
-        pos_flow = money_flow.where(delta > 0, 0)
-        neg_flow = money_flow.where(delta < 0, 0)
-        
-        pos_mf = pos_flow.rolling(period).sum()
-        neg_mf = neg_flow.rolling(period).sum()
-        
-        if neg_mf.iloc[-1] == 0: return 50.0
-        return safe_float(100 - (100 / (1 + (pos_mf.iloc[-1] / neg_mf.iloc[-1]))))
+        tp = (df['High'] + df['Low'] + df['Close']) / 3
+        mf = tp * df['Volume']
+        pos = mf.where(tp.diff() > 0, 0).rolling(period).sum()
+        neg = mf.where(tp.diff() < 0, 0).rolling(period).sum()
+        if neg.iloc[-1] == 0: return 50.0
+        return safe_float(100 - (100 / (1 + (pos.iloc[-1] / neg.iloc[-1]))))
     except: return 50.0
 
 def check_vwap_status(df):
     try:
-        # Basit Rolling VWAP (Son 20 bar) - Hata vermemesi için
         v = df['Volume']
         tp = (df['High'] + df['Low'] + df['Close']) / 3
-        tp_v = tp * v
-        
-        cum_v = v.rolling(20).sum()
-        cum_tp_v = tp_v.rolling(20).sum()
-        
-        if cum_v.iloc[-1] == 0: return "N/A"
-        
-        vwap = cum_tp_v / cum_v
-        current = df['Close'].iloc[-1]
-        vwap_val = vwap.iloc[-1]
-        
-        dist = ((current - vwap_val) / vwap_val) * 100
-        
+        vwap = (tp * v).rolling(20).sum() / v.rolling(20).sum()
+        if v.rolling(20).sum().iloc[-1] == 0: return "N/A"
+        dist = ((df['Close'].iloc[-1] - vwap.iloc[-1]) / vwap.iloc[-1]) * 100
         if dist > 2.0: return f"Expensive (+{dist:.1f}%)"
         elif dist < -2.0: return f"Cheap ({dist:.1f}%)"
         else: return "At VWAP"
     except: return "N/A"
 
-# ==========================================
-# 🧠 QUANT RISK (SAFE)
-# ==========================================
 def calculate_atr(df, period=14):
     try:
         h_l = df['High'] - df['Low']
         h_c = (df['High'] - df['Close'].shift()).abs()
         l_c = (df['Low'] - df['Close'].shift()).abs()
         tr = pd.concat([h_l, h_c, l_c], axis=1).max(axis=1)
-        val = tr.rolling(period).mean().iloc[-1]
-        return safe_float(val)
+        return safe_float(tr.rolling(period).mean().iloc[-1])
     except: return 0.0
 
 def calculate_rsi(series, period=14):
@@ -234,9 +187,8 @@ def calculate_rsi(series, period=14):
         delta = series.diff()
         gain = delta.where(delta>0, 0).rolling(period).mean()
         loss = (-delta.where(delta<0, 0)).rolling(period).mean()
-        if loss.iloc[-1] == 0: return 50.0 # Divide by zero koruması
-        rs = gain / loss
-        return 100 - (100 / (1 + rs))
+        if loss.iloc[-1] == 0: return 50.0
+        return 100 - (100 / (1 + gain/loss))
     except: return pd.Series([50]*len(series))
 
 def get_vix_sentiment():
@@ -295,13 +247,10 @@ def check_past_trade(df, entry_idx, direction, atr):
 
 # --- CORE LOGIC ---
 def get_data(symbol, interval):
-    # YFinance MultiIndex sorununu çözmek için auto_adjust=True ve group_by='ticker' kapalı
     try:
         df = yf.download(symbol, period=("1d" if interval=="5m" else "5d"), interval=interval, progress=False, auto_adjust=True)
         if df is None or len(df) < 2: return None
-        # Sütun isimlerini düzleştir (Flatten MultiIndex columns if exists)
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
+        if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
         return df
     except: return None
 
@@ -335,10 +284,14 @@ def scan_smt_for_set(set_key, timeframe, market_status, market_change):
         for p in peers:
             df = get_data(p, timeframe)
             if df is None: continue
+            
+            # Trend Bias (Hisse bazlı)
+            trend_bias = check_trend_bias(df)
+            
             l, h, l_idx, h_idx = find_swings(df, 2 if timeframe=="5m" else 3)
             if l is not None:
                 atr = calculate_atr(df)
-                data[p] = {"df":df, "l":l, "h":h, "l_idx":l_idx, "h_idx":h_idx, "atr":atr, "last":len(df)-1, "c":safe_float(df['Close'].iloc[-1])}
+                data[p] = {"df":df, "l":l, "h":h, "l_idx":l_idx, "h_idx":h_idx, "atr":atr, "last":len(df)-1, "c":safe_float(df['Close'].iloc[-1]), "bias":trend_bias}
         
         if len(data) < 2: return
         for s1, s2 in combinations(data.keys(), 2):
@@ -353,6 +306,14 @@ def scan_smt_for_set(set_key, timeframe, market_status, market_change):
                     laggard = s2 if leader == s1 else s1
                     main = data[leader]
                     
+                    # RISKY CHECK
+                    if main["bias"] == "BULLISH":
+                        action_txt = "🚨 **ACTION: SHORT (⚠️ RISKY)** 📉"
+                        trend_txt = "⚠️ Counter-Trend (Uptrend)"
+                    else:
+                        action_txt = "🚨 **ACTION: SHORT** 📉"
+                        trend_txt = "✅ Trend Aligned"
+
                     hurst = calculate_hurst(main["df"])
                     markov = calculate_markov_prob(main["df"])
                     cycle = calculate_fft_cycle(main["df"])
@@ -364,7 +325,8 @@ def scan_smt_for_set(set_key, timeframe, market_status, market_change):
                     past_res = check_past_trade(main["df"], main["h_idx"][-2], "SHORT", main["atr"])
 
                     msg = (f"{header}\n⚔️ **CHIP WAR ({s1} vs {s2})**\n\n"
-                           f"🚨 **ACTION: SHORT** 📉\n------------------------\n"
+                           f"{action_txt}\n------------------------\n"
+                           f"🛡️ **Status:** {trend_txt}\n"
                            f"💪 **Strong:** {leader} (HH)\n🛑 **Weak:** {laggard} (LH)\n"
                            f"⏱️ **TF:** {timeframe}\n"
                            f"========================\n"
@@ -386,6 +348,14 @@ def scan_smt_for_set(set_key, timeframe, market_status, market_change):
                 if leader:
                     laggard = s2 if leader == s1 else s1
                     main = data[leader]
+
+                    # RISKY CHECK
+                    if main["bias"] == "BEARISH":
+                        action_txt = "🚨 **ACTION: LONG (⚠️ RISKY)** 🚀"
+                        trend_txt = "⚠️ Counter-Trend (Downtrend)"
+                    else:
+                        action_txt = "🚨 **ACTION: LONG** 🚀"
+                        trend_txt = "✅ Trend Aligned"
                     
                     hurst = calculate_hurst(main["df"])
                     markov = calculate_markov_prob(main["df"])
@@ -398,7 +368,8 @@ def scan_smt_for_set(set_key, timeframe, market_status, market_change):
                     past_res = check_past_trade(main["df"], main["l_idx"][-2], "LONG", main["atr"])
 
                     msg = (f"{header}\n⚔️ **CHIP WAR ({s1} vs {s2})**\n\n"
-                           f"🚨 **ACTION: LONG** 🚀\n------------------------\n"
+                           f"{action_txt}\n------------------------\n"
+                           f"🛡️ **Status:** {trend_txt}\n"
                            f"📉 **Sweeping:** {leader} (LL)\n🛡️ **Holding:** {laggard} (HL)\n"
                            f"⏱️ **TF:** {timeframe}\n"
                            f"========================\n"
@@ -416,6 +387,8 @@ def scan_smt_for_set(set_key, timeframe, market_status, market_change):
         ref = config["ref"]
         df = get_data(ref, timeframe)
         if df is None: return
+        
+        trend_bias = check_trend_bias(df)
         l, h, l_idx, h_idx = find_swings(df, 2 if timeframe=="5m" else 3)
         if l is None: return
         
@@ -423,7 +396,6 @@ def scan_smt_for_set(set_key, timeframe, market_status, market_change):
         rsi = calculate_rsi(df['Close'])
         data_ref = {"l":l, "h":h, "l_idx":l_idx, "h_idx":h_idx, "c":safe_float(df['Close'].iloc[-1]), "last":len(df)-1}
         
-        # MATH & QUANT (Safe Calls)
         hurst = calculate_hurst(df)
         markov = calculate_markov_prob(df)
         cycle = calculate_fft_cycle(df)
@@ -445,16 +417,24 @@ def scan_smt_for_set(set_key, timeframe, market_status, market_change):
 
         # SHORT
         if divs_short and (data_ref["last"] - data_ref["h_idx"][-1] <= FRESHNESS_LIMIT):
+            # RISKY CHECK
+            if trend_bias == "BULLISH":
+                action_txt = "🚨 **ACTION: SHORT (⚠️ RISKY)** 📉"
+                trend_txt = "⚠️ Counter-Trend (Uptrend)"
+            else:
+                action_txt = "🚨 **ACTION: SHORT** 📉"
+                trend_txt = "✅ Trend Aligned"
+
             rsi_val = safe_float(rsi.iloc[data_ref["h_idx"][-1]])
             prev_rsi = safe_float(rsi.iloc[data_ref["h_idx"][-2]])
             is_div = rsi_val < prev_rsi
             icon = "💣" if is_div else "⚡"
-            
             fvg = find_nearest_fvg(df, "SHORT")
             past_res = check_past_trade(df, h_idx[-2], "SHORT", atr)
 
             msg = (f"{header}\n{icon} **{config['name']} SHORT**\n\n"
-                   f"🚨 **ACTION: SHORT** 📉\n------------------------\n"
+                   f"{action_txt}\n------------------------\n"
+                   f"🛡️ **Status:** {trend_txt}\n"
                    f"📉 **Leader:** {ref} (HH)\n🛑 **Laggard:** {', '.join(divs_short)}\n"
                    f"🔋 **RSI:** {prev_rsi:.0f}->{rsi_val:.0f} ({'Div' if is_div else 'No Div'})\n"
                    f"========================\n"
@@ -470,16 +450,24 @@ def scan_smt_for_set(set_key, timeframe, market_status, market_change):
 
         # LONG
         if divs_long and (data_ref["last"] - data_ref["l_idx"][-1] <= FRESHNESS_LIMIT):
+            # RISKY CHECK
+            if trend_bias == "BEARISH":
+                action_txt = "🚨 **ACTION: LONG (⚠️ RISKY)** 🚀"
+                trend_txt = "⚠️ Counter-Trend (Downtrend)"
+            else:
+                action_txt = "🚨 **ACTION: LONG** 🚀"
+                trend_txt = "✅ Trend Aligned"
+
             rsi_val = safe_float(rsi.iloc[data_ref["l_idx"][-1]])
             prev_rsi = safe_float(rsi.iloc[data_ref["l_idx"][-2]])
             is_div = rsi_val > prev_rsi
             icon = "🚀" if is_div else "⚡"
-            
             fvg = find_nearest_fvg(df, "LONG")
             past_res = check_past_trade(df, l_idx[-2], "LONG", atr)
             
             msg = (f"{header}\n{icon} **{config['name']} LONG**\n\n"
-                   f"🚨 **ACTION: LONG** 🚀\n------------------------\n"
+                   f"{action_txt}\n------------------------\n"
+                   f"🛡️ **Status:** {trend_txt}\n"
                    f"📈 **Leader:** {ref} (LL)\n🛡️ **Holding:** {', '.join(divs_long)}\n"
                    f"🔋 **RSI:** {prev_rsi:.0f}->{rsi_val:.0f} ({'Div' if is_div else 'No Div'})\n"
                    f"========================\n"
