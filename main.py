@@ -1,9 +1,9 @@
 import sys
 import traceback
 
-# --- HATA YAKALAYICI BAŞLANGICI ---
+# --- ERROR HANDLER START ---
 try:
-    print(">>> Bot Başlatılıyor... Kütüphaneler Yükleniyor...")
+    print(">>> Bot Starting... Loading Libraries...")
     import os
     import yfinance as yf
     import pandas as pd
@@ -12,83 +12,97 @@ try:
     from scipy.signal import argrelextrema
     from datetime import datetime, time
     import pytz
-    print(">>> Kütüphaneler Başarıyla Yüklendi.")
+    from itertools import combinations
+    print(">>> Libraries Loaded Successfully.")
 
-    # --- AYARLAR ---
+    # --- SETTINGS ---
     TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
     CHAT_ID = os.environ.get("CHAT_ID")
 
-    # --- KESİN KURAL: VERİ AYARLARI ---
+    # --- DATA RULES ---
     STATS_DATA_PERIOD = "1y" 
     MAIN_INDEX = "TQQQ"
 
-    # --- SMT SETLERİ ---
+    # --- SMT CONFIGURATION ---
     SMT_CONFIG = {
-        "SET_1": {"name": "🔥 TQQQ TRIO", "ref": "TQQQ", "comps": ["SOXL", "NVDA"]},
-        "SET_2": {"name": "⚖️ TQQQ-SEMI DUO", "ref": "TQQQ", "comps": ["SOXL"]},
-        "SET_3": {"name": "💾 CHIP GIANTS", "ref": "AVGO", "comps": ["MU", "NVDA"]}
+        # SET 1: TQQQ TRIO (SMT + RSI CHECK)
+        "SET_1": {
+            "type": "standard",
+            "name": "🔥 TQQQ TRIO",
+            "ref": "TQQQ", 
+            "comps": ["SOXL", "NVDA"] 
+        },
+        # SET 2: TQQQ DUO (SMT + RSI CHECK)
+        "SET_2": {
+            "type": "standard",
+            "name": "⚖️ TQQQ SEMI DUO",
+            "ref": "TQQQ",
+            "comps": ["SOXL"]
+        },
+        # SET 3: CHIP CLUSTER (HİSSE MATRIX - AYNI KALDI)
+        "SET_3": {
+            "type": "cluster",
+            "name": "⚔️ CHIP WARS (Matrix)",
+            "peers": ["NVDA", "AVGO", "MU"] 
+        }
     }
 
-    # Zaman Dilimleri
+    # Timeframes
     TF_MICRO = "5m"
     TF_SCALP = "15m"
     TF_SWING = "1h"
 
-    # --- İSTATİSTİKSEL EŞİKLER ---
+    # --- THRESHOLDS ---
     SCALP_PERCENTILE = 75  
     SWING_PERCENTILE = 90  
+    FRESHNESS_LIMIT = 5 
 
     def send_telegram(message):
         if not TELEGRAM_TOKEN or not CHAT_ID: 
-            print("!!! UYARI: Telegram Token veya Chat ID eksik! Mesaj atılamıyor.")
+            print("!!! WARNING: Token or Chat ID missing.")
             return
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         data = {"chat_id": CHAT_ID, "text": message, "parse_mode": "Markdown"}
-        try: 
-            response = requests.post(url, data=data)
-            if response.status_code != 200:
-                print(f"!!! Telegram API Hatası: {response.text}")
-            else:
-                print(">>> Mesaj başarıyla Telegram'a iletildi.")
-        except Exception as e: 
-            print(f"!!! Telegram Bağlantı Hatası: {e}")
+        try: requests.post(url, data=data)
+        except Exception as e: print(f"!!! Telegram Error: {e}")
 
-    # --- ZAMAN KONTROLÜ ---
+    # --- TIME CONTROL ---
     def get_ny_time():
         ny_tz = pytz.timezone('America/New_York')
         return datetime.now(ny_tz)
 
-    def is_micro_scalp_time():
-        """ 09:30 - 11:30 NY Saati """
+    def is_opening_range():
         now_ny = get_ny_time().time()
         return time(9, 30) <= now_ny <= time(11, 30)
 
-    # --- YENİ: SİSTEM OKEY MESAJI ---
     def send_system_ok_message():
         now = get_ny_time()
-        msg = (f"🟢 **SİSTEM OKEY** 🟢\n"
-               f"🕒 NY Saati: `{now.strftime('%H:%M')}`\n"
-               f"✅ Bot: Çalışıyor\n"
-               f"📡 Bağlantı: Başarılı")
+        msg = (f"🟢 **SYSTEM OPERATIONAL** 🟢\n"
+               f"🕒 NY Time: `{now.strftime('%H:%M')}`\n"
+               f"✅ Bot: Active\n"
+               f"📡 Mode: HYBRID (Standard + RSI SMT)")
         send_telegram(msg)
 
-    # --- YARDIMCI: GÜVENLİ VERİ DÖNÜŞTÜRME ---
+    # --- HELPERS ---
     def safe_float(val):
-        """Pandas Series veya tekil değeri float'a çevirir"""
         try:
-            if isinstance(val, pd.Series):
-                return float(val.iloc[0])
+            if isinstance(val, pd.Series): return float(val.iloc[0])
             return float(val)
-        except:
-            return 0.0
+        except: return 0.0
 
-    # --- BÖLÜM 1: 1 YILLIK VERİ İLE İSTATİSTİK ANALİZİ ---
+    # --- RSI CALCULATOR ---
+    def calculate_rsi(series, period=14):
+        delta = series.diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+        rs = gain / loss
+        return 100 - (100 / (1 + rs))
+
+    # --- PART 1: MARKET STATS ---
     def analyze_market_regime():
-        print(f">>> {MAIN_INDEX} Verisi Çekiliyor...")
+        print(f">>> Fetching {MAIN_INDEX} Data...")
         df = yf.download(MAIN_INDEX, period=STATS_DATA_PERIOD, interval="1d", progress=False)
-        if len(df) < 10: 
-            print("!!! Yetersiz Günlük Veri.")
-            return 0, "VERI_YOK", 0
+        if len(df) < 10: return 0, "NO_DATA", 0
         
         df['Up_Move'] = (df['High'] - df['Open']) / df['Open']
         df['Down_Move'] = (df['Open'] - df['Low']) / df['Open']
@@ -99,15 +113,10 @@ try:
         scalp_down = np.percentile(df['Down_Move'].dropna(), SCALP_PERCENTILE)
         
         today = df.iloc[-1]
-        
-        # --- KRİTİK DÜZELTME BURADA YAPILDI ---
-        # yfinance bazen Series döndürdüğü için safe_float ile sayıya zorluyoruz
         close_p = safe_float(today['Close'])
         open_p = safe_float(today['Open'])
-        
         if open_p == 0: change_pct = 0
         else: change_pct = (close_p - open_p) / open_p
-        # ---------------------------------------
         
         status = "NORMAL"
         if change_pct > 0:
@@ -118,157 +127,214 @@ try:
             if down > swing_down: status = "SWING_LONG_ZONE"
             elif down > scalp_down: status = "SCALP_LONG_ZONE"
             
-        print(f">>> Piyasa Durumu: {status} (%{change_pct*100:.2f})")
+        print(f">>> Market Status: {status} ({change_pct*100:.2f}%)")
         return change_pct, status, close_p
 
-    # --- BÖLÜM 2: SMT TARAYICI ---
+    # --- PART 2: DATA & SWINGS ---
     def get_data(symbol, interval):
         p = "1d" if interval == "5m" else "5d"
         return yf.download(symbol, period=p, interval=interval, progress=False)
 
     def find_swings(df, order):
-        if df is None or len(df) < 10: return None, None
-        
-        # NumPy array'e çevirerek işlem yap (Hata önleyici)
-        close_vals = df['Close'].values.flatten() # Düzleştir
-        
-        mins = argrelextrema(close_vals, np.less_equal, order=order)[0]
-        maxs = argrelextrema(close_vals, np.greater_equal, order=order)[0]
-        
-        if len(mins) == 0 or len(maxs) == 0: return None, None
-        
-        return df.iloc[mins]['Close'], df.iloc[maxs]['Close']
+        if df is None or len(df) < 10: return None, None, None, None
+        close_vals = df['Close'].values.flatten()
+        mins_idx = argrelextrema(close_vals, np.less_equal, order=order)[0]
+        maxs_idx = argrelextrema(close_vals, np.greater_equal, order=order)[0]
+        if len(mins_idx) == 0 or len(maxs_idx) == 0: return None, None, None, None
+        return df.iloc[mins_idx]['Close'], df.iloc[maxs_idx]['Close'], mins_idx, maxs_idx
 
+    # --- PART 3: SCANNER ENGINE ---
     def scan_smt_for_set(set_key, timeframe, market_status, market_change):
         config = SMT_CONFIG[set_key]
-        ref_ticker = config["ref"]
-        comp_tickers = config["comps"]
+        strategy_type = config.get("type", "standard")
         strategy_name = config["name"]
         
         if timeframe == "5m": order = 1
         elif timeframe == "15m": order = 2
         else: order = 3
 
-        data_store = {}
-        
-        # Referans
-        df_ref = get_data(ref_ticker, timeframe)
-        if df_ref is None or len(df_ref) < 10: return
-        
-        lows, highs = find_swings(df_ref, order)
-        if lows is None or len(lows) < 2 or len(highs) < 2: return
+        if is_opening_range(): time_header = "🌅 **OPENING RANGE SNIPER**"
+        else: time_header = "⚡ **INTRADAY SCAN**"
 
-        # Değerleri güvenli sayıya çevir
-        try:
-            data_store["REF"] = {
-                "L_new": safe_float(lows.iloc[-1]), "L_old": safe_float(lows.iloc[-2]),
-                "H_new": safe_float(highs.iloc[-1]), "H_old": safe_float(highs.iloc[-2]),
-                "Price": safe_float(df_ref['Close'].iloc[-1])
-            }
-        except: return
-
-        # Karşılaştırma
-        for sym in comp_tickers:
-            df_c = get_data(sym, timeframe)
-            if df_c is None: continue
-            l, h = find_swings(df_c, order)
-            if l is not None and len(l) >= 2 and len(h) >= 2:
-                try:
-                    data_store[sym] = {
+        # --- LOGIC A: CLUSTER MODE (HİSSE MATRIX - AYNI) ---
+        if strategy_type == "cluster":
+            peers = config["peers"]
+            peer_data = {}
+            for p in peers:
+                df = get_data(p, timeframe)
+                if df is None: continue
+                l, h, l_idx, h_idx = find_swings(df, order)
+                if l is not None:
+                    peer_data[p] = {
                         "L_new": safe_float(l.iloc[-1]), "L_old": safe_float(l.iloc[-2]),
-                        "H_new": safe_float(h.iloc[-1]), "H_old": safe_float(h.iloc[-2])
+                        "H_new": safe_float(h.iloc[-1]), "H_old": safe_float(h.iloc[-2]),
+                        "H_idx": h_idx[-1], "L_idx": l_idx[-1],
+                        "Last_Bar": len(df) - 1
                     }
-                except: continue
-            else:
-                return 
-
-        msg = ""
-        current_price = data_store["REF"]["Price"]
-
-        # BEARISH SMT
-        if data_store["REF"]["H_new"] > data_store["REF"]["H_old"]:
-            divergences = []
-            for sym in comp_tickers:
-                if sym in data_store and data_store[sym]["H_new"] < data_store[sym]["H_old"]:
-                    divergences.append(sym)
             
-            if divergences:
-                icon = "🔬" if timeframe == "5m" else "⚡" if timeframe == "15m" else "🚨"
-                comment = "Nötr (Teknik)"
-                if "SHORT_ZONE" in market_status: comment = "🔥 GÜÇLÜ FIRSAT (İstatistik Onaylı)"
-                elif "LONG_ZONE" in market_status: comment = "⚠️ TERS YÖN (Riskli)"
+            if len(peer_data) < 2: return
 
-                msg = (f"{icon} **{strategy_name} SHORT ({timeframe})**\n\n"
-                       f"📉 **Lider:** {ref_ticker} Yükseldi.\n"
-                       f"🛑 **Onaylamayan:** {', '.join(divergences)}\n"
-                       f"🌍 **Bölge:** {market_status} (%{market_change*100:.2f})\n"
-                       f"🧠 **Yorum:** {comment}\n"
-                       f"Fiyat: {current_price:.2f}")
+            for s1, s2 in combinations(peer_data.keys(), 2):
+                d1, d2 = peer_data[s1], peer_data[s2]
+                
+                # Bearish Cluster
+                if d1["H_new"] > d1["H_old"] and d2["H_new"] < d2["H_old"]:
+                    if (d1["Last_Bar"] - d1["H_idx"] <= FRESHNESS_LIMIT):
+                        msg = (f"{time_header}\n⚔️ **CHIP WAR ({s1} vs {s2})**\n\n"
+                               f"💪 **Strong:** {s1} (HH)\n🛑 **Weak:** {s2} (LH)\n"
+                               f"⏱️ **TF:** {timeframe}\n🧠 Divergence in Sector")
+                        send_telegram(msg)
+                elif d2["H_new"] > d2["H_old"] and d1["H_new"] < d1["H_old"]:
+                    if (d2["Last_Bar"] - d2["H_idx"] <= FRESHNESS_LIMIT):
+                        msg = (f"{time_header}\n⚔️ **CHIP WAR ({s2} vs {s1})**\n\n"
+                               f"💪 **Strong:** {s2} (HH)\n🛑 **Weak:** {s1} (LH)\n"
+                               f"⏱️ **TF:** {timeframe}\n🧠 Divergence in Sector")
+                        send_telegram(msg)
+                # Bullish Cluster logic implied...
 
-        # BULLISH SMT
-        elif data_store["REF"]["L_new"] < data_store["REF"]["L_old"]:
-            divergences = []
-            for sym in comp_tickers:
-                if sym in data_store and data_store[sym]["L_new"] > data_store[sym]["L_old"]:
-                    divergences.append(sym)
-            
-            if divergences:
-                icon = "🔬" if timeframe == "5m" else "⚡" if timeframe == "15m" else "🚨"
-                comment = "Nötr (Teknik)"
-                if "LONG_ZONE" in market_status: comment = "🔥 GÜÇLÜ FIRSAT (İstatistik Onaylı)"
-                elif "SHORT_ZONE" in market_status: comment = "⚠️ TERS YÖN (Riskli)"
-
-                msg = (f"{icon} **{strategy_name} LONG ({timeframe})**\n\n"
-                       f"📈 **Lider:** {ref_ticker} Düştü.\n"
-                       f"💪 **Tutunan:** {', '.join(divergences)}\n"
-                       f"🌍 **Bölge:** {market_status} (%{market_change*100:.2f})\n"
-                       f"🧠 **Yorum:** {comment}\n"
-                       f"Fiyat: {current_price:.2f}")
-
-        if msg:
-            print(f">>> Sinyal Bulundu: {strategy_name} ({timeframe})")
-            send_telegram(msg)
-
-    # --- ANA ÇALIŞTIRMA BLOĞU ---
-    if __name__ == "__main__":
-        print(">>> Bot Çalışma Döngüsü Başladı...")
-        
-        # 1. HER ÇALIŞMADA BİLDİRİM AT (Sistem Okey)
-        send_system_ok_message()
-        
-        # 2. İSTATİSTİK
-        m_change, m_status, m_price = analyze_market_regime()
-        if m_status == "VERI_YOK":
-            print("!!! Veri alınamadığı için analiz atlanıyor.")
+        # --- LOGIC B: STANDARD MODE (TQQQ - HYBRID CHECK) ---
         else:
+            ref_ticker = config["ref"]
+            comp_tickers = config["comps"]
+            
+            df_ref = get_data(ref_ticker, timeframe)
+            if df_ref is None: return
+            
+            # 1. RSI Calculate
+            rsi_series = calculate_rsi(df_ref['Close'])
+            
+            l, h, l_idx, h_idx = find_swings(df_ref, order)
+            if l is None: return
+
+            last_candle_idx = len(df_ref) - 1
+            
+            # Get RSI at Swing Points
+            try:
+                rsi_new_high = safe_float(rsi_series.iloc[h_idx[-1]])
+                rsi_old_high = safe_float(rsi_series.iloc[h_idx[-2]])
+                rsi_new_low = safe_float(rsi_series.iloc[l_idx[-1]])
+                rsi_old_low = safe_float(rsi_series.iloc[l_idx[-2]])
+            except: 
+                rsi_new_high = rsi_old_high = rsi_new_low = rsi_old_low = 50 
+
+            data_store = {}
+            try:
+                data_store["REF"] = {
+                    "L_new": safe_float(l.iloc[-1]), "L_old": safe_float(l.iloc[-2]),
+                    "H_new": safe_float(h.iloc[-1]), "H_old": safe_float(h.iloc[-2]),
+                    "Price": safe_float(df_ref['Close'].iloc[-1]),
+                    "H_idx": h_idx[-1], "L_idx": l_idx[-1]
+                }
+            except: return
+
+            for sym in comp_tickers:
+                df_c = get_data(sym, timeframe)
+                if df_c is None: continue
+                l, h, _, _ = find_swings(df_c, order)
+                if l is not None:
+                    try:
+                        data_store[sym] = {
+                            "L_new": safe_float(l.iloc[-1]), "L_old": safe_float(l.iloc[-2]),
+                            "H_new": safe_float(h.iloc[-1]), "H_old": safe_float(h.iloc[-2])
+                        }
+                    except: continue
+
+            # --- BEARISH CHECK (SHORT) ---
+            if data_store["REF"]["H_new"] > data_store["REF"]["H_old"]:
+                bars_ago = last_candle_idx - data_store["REF"]["H_idx"]
+                if bars_ago <= FRESHNESS_LIMIT:
+                    divs = []
+                    for s in comp_tickers:
+                        if s in data_store and data_store[s]["H_new"] < data_store[s]["H_old"]:
+                            divs.append(s)
+                    
+                    if divs:
+                        # 1. RSI CHECK
+                        has_rsi_div = (rsi_new_high < rsi_old_high)
+                        
+                        # 2. HEADER & STYLE SELECTION
+                        if has_rsi_div:
+                            # SMT + RSI DIV (BOMBA)
+                            final_header = f"💣 **RSI + SMT SETUP**"
+                            rsi_msg = f"📉 **RSI Div:** {rsi_old_high:.0f} -> {rsi_new_high:.0f} (Bearish)"
+                            comment = "🔥 **HIGH PROBABILITY SHORT**"
+                            icon = "💣"
+                        else:
+                            # SADECE SMT (NORMAL)
+                            final_header = f"⚡ **STANDARD SMT**"
+                            rsi_msg = f"RSI: {rsi_new_high:.0f} (No Div)"
+                            comment = "Asset Divergence"
+                            icon = "🐻"
+
+                        msg = (f"{time_header}\n{final_header}\n\n"
+                               f"{icon} **{strategy_name} SHORT ({timeframe})**\n"
+                               f"📉 **Leader:** {ref_ticker} Higher High\n"
+                               f"🛑 **Laggard:** {', '.join(divs)}\n"
+                               f"🔋 **Momentum:** {rsi_msg}\n"
+                               f"🌍 **Zone:** {market_status}\n"
+                               f"🕯️ **Freshness:** {bars_ago} bars\n"
+                               f"🧠 {comment}\nPrice: {data_store['REF']['Price']:.2f}")
+                        send_telegram(msg)
+
+            # --- BULLISH CHECK (LONG) ---
+            elif data_store["REF"]["L_new"] < data_store["REF"]["L_old"]:
+                bars_ago = last_candle_idx - data_store["REF"]["L_idx"]
+                if bars_ago <= FRESHNESS_LIMIT:
+                    divs = []
+                    for s in comp_tickers:
+                        if s in data_store and data_store[s]["L_new"] > data_store[s]["L_old"]:
+                            divs.append(s)
+                    
+                    if divs:
+                        # 1. RSI CHECK
+                        has_rsi_div = (rsi_new_low > rsi_old_low)
+                        
+                        # 2. HEADER & STYLE SELECTION
+                        if has_rsi_div:
+                            final_header = f"🚀 **RSI + SMT SETUP**"
+                            rsi_msg = f"📈 **RSI Div:** {rsi_old_low:.0f} -> {rsi_new_low:.0f} (Bullish)"
+                            comment = "🔥 **HIGH PROBABILITY LONG**"
+                            icon = "🚀"
+                        else:
+                            final_header = f"⚡ **STANDARD SMT**"
+                            rsi_msg = f"RSI: {rsi_new_low:.0f} (No Div)"
+                            comment = "Asset Divergence"
+                            icon = "🐮"
+
+                        msg = (f"{time_header}\n{final_header}\n\n"
+                               f"{icon} **{strategy_name} LONG ({timeframe})**\n"
+                               f"📈 **Leader:** {ref_ticker} Lower Low\n"
+                               f"💪 **Holding:** {', '.join(divs)}\n"
+                               f"🔋 **Momentum:** {rsi_msg}\n"
+                               f"🌍 **Zone:** {market_status}\n"
+                               f"🕯️ **Freshness:** {bars_ago} bars\n"
+                               f"🧠 {comment}\nPrice: {data_store['REF']['Price']:.2f}")
+                        send_telegram(msg)
+
+    # --- MAIN ---
+    if __name__ == "__main__":
+        print(">>> Execution Loop Started...")
+        send_system_ok_message()
+        m_change, m_status, m_price = analyze_market_regime()
+        
+        if m_status != "NO_DATA":
             strategies = ["SET_1", "SET_2", "SET_3"]
             
-            # 3. TARAMA
-            # MİKRO SCALP (09:30-11:30)
-            if is_micro_scalp_time():
-                print(">>> Saat Uygun: Mikro Scalp (5m) Taranıyor...")
+            if is_opening_range():
+                print(">>> Opening Range Scan...")
                 for strat in strategies:
                     try: scan_smt_for_set(strat, TF_MICRO, m_status, m_change)
-                    except Exception as e: print(f"Hata {strat} 5m: {e}")
-            else:
-                print(">>> Mikro Scalp Saati Değil. (5m Atlanıyor)")
-
-            # GENEL TARAMA
-            print(">>> Genel Tarama (15m & 1h) Başlıyor...")
+                    except: pass
+            
+            print(">>> Standard Scan...")
             for strat in strategies:
                 try: scan_smt_for_set(strat, TF_SCALP, m_status, m_change)
-                except Exception as e: print(f"Hata {strat} 15m: {e}")
-                
+                except: pass
                 try: scan_smt_for_set(strat, TF_SWING, m_status, m_change)
-                except Exception as e: print(f"Hata {strat} 1h: {e}")
+                except: pass
+        print(">>> Finished.")
 
-        print(">>> Bot Döngüsü Başarıyla Tamamlandı.")
-
-# --- HATA YAKALAYICI SONU ---
 except Exception as e:
-    print("\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
-    print("CRITICAL ERROR: KOD ÇÖKTÜ!")
-    print(f"HATA MESAJI: {e}")
+    print(f"CRITICAL ERROR: {e}")
     traceback.print_exc()
-    print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n")
     sys.exit(1)
