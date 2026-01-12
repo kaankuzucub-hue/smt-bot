@@ -23,7 +23,7 @@ REWARD_RATIO = 2.0
 STATS_DATA_PERIOD = "1y"
 MAIN_INDEX = "TQQQ"
 
-# --- SMT CONFIGURATION (HEPSİ DURUYOR) ---
+# --- SMT CONFIGURATION ---
 SMT_CONFIG = {
     "SET_1": {"type": "standard", "name": "🔥 TQQQ TRIO", "ref": "TQQQ", "comps": ["SOXL", "NVDA"]},
     "SET_2": {"type": "standard", "name": "⚖️ TQQQ SEMI DUO", "ref": "TQQQ", "comps": ["SOXL"]},
@@ -49,7 +49,7 @@ def send_telegram(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     data = {"chat_id": CHAT_ID, "text": message, "parse_mode": "Markdown"}
     try:
-        response = requests.post(url, data=data, timeout=10)
+        requests.post(url, data=data, timeout=10)
     except Exception as e:
         print(f"!!! Telegram Error: {e}")
 
@@ -59,6 +59,7 @@ def get_ny_time():
 
 def is_opening_range():
     now_ny = get_ny_time().time()
+    # Piyasalar kapalı olsa bile test için 24 saat açık bırakabiliriz ama kurala sadık kalalım
     return time(9, 30) <= now_ny <= time(11, 30)
 
 def send_system_ok_message():
@@ -66,52 +67,50 @@ def send_system_ok_message():
     msg = (f"🟢 **SYSTEM OPERATIONAL** 🟢\n"
            f"🕒 NY Time: `{now.strftime('%H:%M')}`\n"
            f"✅ Bot: Active\n"
-           f"🧠 Mode: MATH GOD (Markov/Hurst/FFT)")
+           f"🧠 Brain: MATH GOD (Armored)")
     send_telegram(msg)
 
 def safe_float(val):
     try:
-        if isinstance(val, pd.Series): return float(val.iloc[0])
+        if isinstance(val, pd.Series): 
+            if val.empty: return 0.0
+            return float(val.iloc[0])
         return float(val)
     except: return 0.0
 
 # ==========================================
-# 🧠 LAYER 5: MATH GOD (YENİ EKLENDİ)
+# 🧠 LAYER 5: MATH GOD (SAFE MODE)
 # ==========================================
-
-# 1. HURST EXPONENT (Trend vs Mean Reversion)
 def calculate_hurst(df, lags_count=20):
     try:
-        ts = df['Close'].values
+        # Veriyi düzleştir (Flatten)
+        ts = df['Close'].values.flatten()
+        if len(ts) < lags_count + 5: return "N/A (Data)"
+        
         lags = range(2, lags_count)
         tau = [np.sqrt(np.std(np.subtract(ts[lag:], ts[:-lag]))) for lag in lags]
         poly = np.polyfit(np.log(lags), np.log(tau), 1)
         hurst = poly[0] * 2.0
         
-        if hurst > 0.55: return f"🌊 **Trending ({hurst:.2f})**" # Trend Takip Et
-        elif hurst < 0.45: return f"🪃 **Mean Rev ({hurst:.2f})**" # Tepeden Sat
-        else: return f"🎲 **Random ({hurst:.2f})**" # İşlem Yapma
+        if hurst > 0.55: return f"🌊 **Trending ({hurst:.2f})**"
+        elif hurst < 0.45: return f"🪃 **Mean Rev ({hurst:.2f})**"
+        else: return f"🎲 **Random ({hurst:.2f})**"
     except: return "N/A"
 
-# 2. MARKOV CHAINS (Olasılık Hesabı)
 def calculate_markov_prob(df):
     try:
-        # Son 100 mumu al
         closes = df['Close'].pct_change().dropna().tail(100)
-        # 1: Yükseliş, 0: Düşüş
-        states = (closes > 0).astype(int)
+        if len(closes) < 10: return "N/A"
         
-        # Geçişleri say (0->1, 1->1 vs)
+        states = (closes > 0).astype(int)
         trans_mat = np.zeros((2, 2))
+        
         for i in range(len(states)-1):
             curr = states.iloc[i]
             next_s = states.iloc[i+1]
             trans_mat[curr][next_s] += 1
             
-        # Olasılığa çevir
-        # Şu anki durum ne? (Son mum yeşil mi kırmızı mı?)
         current_state = states.iloc[-1]
-        
         row_sum = np.sum(trans_mat[current_state])
         if row_sum == 0: return "N/A"
         
@@ -123,39 +122,47 @@ def calculate_markov_prob(df):
         else: return f"⚖️ **Neutral (%{prob_bull:.0f})**"
     except: return "N/A"
 
-# 3. FFT (Fast Fourier Transform - Döngü Analizi)
 def calculate_fft_cycle(df):
     try:
-        # Trendi temizle (Detrend)
-        closes = df['Close'].values
+        closes = df['Close'].values.flatten()
+        if len(closes) < 30: return "N/A"
+        
+        # Detrend
         linear_trend = np.linspace(closes[0], closes[-1], len(closes))
         detrended = closes - linear_trend
         
-        # FFT Uygula
+        # FFT
         fft_vals = np.fft.rfft(detrended)
-        fft_freq = np.fft.rfftfreq(len(closes))
-        
-        # En güçlü frekansı bul (DC component 0 hariç)
         magnitudes = np.abs(fft_vals)
+        # 0. index DC component, onu atla
         peak_freq_idx = np.argmax(magnitudes[1:]) + 1
-        peak_freq = fft_freq[peak_freq_idx]
         
-        if peak_freq == 0: return "N/A"
+        # Frekans hesabı (Güvenli)
+        if peak_freq_idx == 0: return "N/A"
+        cycle_len = int(len(closes) / peak_freq_idx)
         
-        cycle_len = int(1 / peak_freq)
-        
-        # Döngünün neresindeyiz? (Basit yaklaşım)
-        # Son X mumda fiyat dip mi yaptı tepe mi?
-        return f"🔄 **Cycle: {cycle_len} Bars**"
+        return f"🔄 **Cycle: ~{cycle_len} Bars**"
     except: return "N/A"
 
 # ==========================================
-# 🏦 LAYER 4: INSTITUTIONAL FLOW & STATS
+# 🏦 LAYER 4: INSTITUTIONAL FLOW (SAFE)
 # ==========================================
 def calculate_z_score(df, period=20):
     try:
         closes = df['Close']
-        z_score = (closes.iloc[-1] - closes.rolling(period).mean().iloc[-1]) / closes.rolling(period).std().iloc[-1]
+        if len(closes) < period: return "N/A"
+        
+        mean = closes.rolling(window=period).mean()
+        std = closes.rolling(window=period).std()
+        
+        curr = closes.iloc[-1]
+        m = mean.iloc[-1]
+        s = std.iloc[-1]
+        
+        if s == 0: return "N/A"
+        
+        z_score = (curr - m) / s
+        
         if z_score > 3.0: return "🔥 **EXTREME (+3σ)**"
         elif z_score < -3.0: return "💎 **EXTREME (-3σ)**"
         elif z_score > 2.0: return "⚠️ **High (+2σ)**"
@@ -165,25 +172,52 @@ def calculate_z_score(df, period=20):
 
 def calculate_mfi(df, period=14):
     try:
-        tp = (df['High'] + df['Low'] + df['Close']) / 3
-        mf = tp * df['Volume']
-        pos = mf.where(tp > tp.shift(), 0).rolling(period).sum()
-        neg = mf.where(tp < tp.shift(), 0).rolling(period).sum()
-        return safe_float(100 - (100 / (1 + (pos/neg))).iloc[-1])
+        # Series kontrolü
+        high = df['High']
+        low = df['Low']
+        close = df['Close']
+        volume = df['Volume']
+        
+        typical_price = (high + low + close) / 3
+        money_flow = typical_price * volume
+        
+        delta = typical_price.diff()
+        
+        pos_flow = money_flow.where(delta > 0, 0)
+        neg_flow = money_flow.where(delta < 0, 0)
+        
+        pos_mf = pos_flow.rolling(period).sum()
+        neg_mf = neg_flow.rolling(period).sum()
+        
+        if neg_mf.iloc[-1] == 0: return 50.0
+        return safe_float(100 - (100 / (1 + (pos_mf.iloc[-1] / neg_mf.iloc[-1]))))
     except: return 50.0
 
 def check_vwap_status(df):
     try:
+        # Basit Rolling VWAP (Son 20 bar) - Hata vermemesi için
+        v = df['Volume']
         tp = (df['High'] + df['Low'] + df['Close']) / 3
-        vwap = (tp * df['Volume']).rolling(20).sum() / df['Volume'].rolling(20).sum()
-        dist = ((df['Close'].iloc[-1] - vwap.iloc[-1]) / vwap.iloc[-1]) * 100
+        tp_v = tp * v
+        
+        cum_v = v.rolling(20).sum()
+        cum_tp_v = tp_v.rolling(20).sum()
+        
+        if cum_v.iloc[-1] == 0: return "N/A"
+        
+        vwap = cum_tp_v / cum_v
+        current = df['Close'].iloc[-1]
+        vwap_val = vwap.iloc[-1]
+        
+        dist = ((current - vwap_val) / vwap_val) * 100
+        
         if dist > 2.0: return f"Expensive (+{dist:.1f}%)"
         elif dist < -2.0: return f"Cheap ({dist:.1f}%)"
         else: return "At VWAP"
     except: return "N/A"
 
 # ==========================================
-# 🧠 LAYER 3: QUANT RISK
+# 🧠 QUANT RISK (SAFE)
 # ==========================================
 def calculate_atr(df, period=14):
     try:
@@ -191,7 +225,8 @@ def calculate_atr(df, period=14):
         h_c = (df['High'] - df['Close'].shift()).abs()
         l_c = (df['Low'] - df['Close'].shift()).abs()
         tr = pd.concat([h_l, h_c, l_c], axis=1).max(axis=1)
-        return safe_float(tr.rolling(period).mean().iloc[-1])
+        val = tr.rolling(period).mean().iloc[-1]
+        return safe_float(val)
     except: return 0.0
 
 def calculate_rsi(series, period=14):
@@ -199,15 +234,18 @@ def calculate_rsi(series, period=14):
         delta = series.diff()
         gain = delta.where(delta>0, 0).rolling(period).mean()
         loss = (-delta.where(delta<0, 0)).rolling(period).mean()
-        return 100 - (100 / (1 + gain/loss))
+        if loss.iloc[-1] == 0: return 50.0 # Divide by zero koruması
+        rs = gain / loss
+        return 100 - (100 / (1 + rs))
     except: return pd.Series([50]*len(series))
 
 def get_vix_sentiment():
     try:
-        vix = yf.download("^VIX", period="2d", interval="1d", progress=False).iloc[-1]['Close']
-        vix = safe_float(vix)
-        if vix > 25: return f"🌪️ **FEAR ({vix:.0f})**"
-        return f"🌊 **Safe ({vix:.0f})**"
+        vix = yf.download("^VIX", period="2d", interval="1d", progress=False)
+        if vix is None or len(vix) < 1: return "N/A"
+        val = safe_float(vix['Close'].iloc[-1])
+        if val > 25: return f"🌪️ **FEAR ({val:.0f})**"
+        return f"🌊 **Safe ({val:.0f})**"
     except: return "N/A"
 
 def find_nearest_fvg(df, direction):
@@ -236,11 +274,14 @@ def generate_trade_plan(price, direction, atr):
 
 def check_past_trade(df, entry_idx, direction, atr):
     try:
+        if atr <= 0: return "N/A"
         ep = safe_float(df['Close'].iloc[entry_idx])
         sl = ep + 1.5*atr if direction == "SHORT" else ep - 1.5*atr
         tp = ep - 3.0*atr if direction == "SHORT" else ep + 3.0*atr
         
         future = df.iloc[entry_idx+1:]
+        if len(future) == 0: return "⏳ **JUST OPENED**"
+
         for i in range(len(future)):
             h, l = safe_float(future['High'].iloc[i]), safe_float(future['Low'].iloc[i])
             if direction == "SHORT":
@@ -254,23 +295,32 @@ def check_past_trade(df, entry_idx, direction, atr):
 
 # --- CORE LOGIC ---
 def get_data(symbol, interval):
-    return yf.download(symbol, period=("1d" if interval=="5m" else "5d"), interval=interval, progress=False, auto_adjust=True)
+    # YFinance MultiIndex sorununu çözmek için auto_adjust=True ve group_by='ticker' kapalı
+    try:
+        df = yf.download(symbol, period=("1d" if interval=="5m" else "5d"), interval=interval, progress=False, auto_adjust=True)
+        if df is None or len(df) < 2: return None
+        # Sütun isimlerini düzleştir (Flatten MultiIndex columns if exists)
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+        return df
+    except: return None
 
 def find_swings(df, order):
     if df is None or len(df)<10: return None, None, None, None
-    c = df['Close'].values.flatten()
-    mins = argrelextrema(c, np.less_equal, order=order)[0]
-    maxs = argrelextrema(c, np.greater_equal, order=order)[0]
-    if not len(mins) or not len(maxs): return None, None, None, None
-    return df.iloc[mins]['Close'], df.iloc[maxs]['Close'], mins, maxs
+    try:
+        c = df['Close'].values.flatten()
+        mins = argrelextrema(c, np.less_equal, order=order)[0]
+        maxs = argrelextrema(c, np.greater_equal, order=order)[0]
+        if not len(mins) or not len(maxs): return None, None, None, None
+        return df.iloc[mins]['Close'], df.iloc[maxs]['Close'], mins, maxs
+    except: return None, None, None, None
 
 def analyze_market_regime():
     print(f">>> Fetching {MAIN_INDEX}...")
     df = get_data(MAIN_INDEX, "1d")
     if df is None: return 0, "NO_DATA", 0
-    # ... (Basit piyasa analizi kodu aynı)
     today = df.iloc[-1]
-    return 0.0, "NORMAL", safe_float(today['Close']) # Basitleştirildi
+    return 0.0, "NORMAL", safe_float(today['Close'])
 
 def scan_smt_for_set(set_key, timeframe, market_status, market_change):
     config = SMT_CONFIG[set_key]
@@ -280,7 +330,8 @@ def scan_smt_for_set(set_key, timeframe, market_status, market_change):
     if is_cluster:
         peers = config["peers"]
         data = {}
-        # VIX Tekrar çekmemek için basit tuttum
+        vix_msg = get_vix_sentiment()
+        
         for p in peers:
             df = get_data(p, timeframe)
             if df is None: continue
@@ -302,13 +353,16 @@ def scan_smt_for_set(set_key, timeframe, market_status, market_change):
                     laggard = s2 if leader == s1 else s1
                     main = data[leader]
                     
-                    # --- MATH GOD CALCS ---
                     hurst = calculate_hurst(main["df"])
                     markov = calculate_markov_prob(main["df"])
                     cycle = calculate_fft_cycle(main["df"])
                     z = calculate_z_score(main["df"])
-                    
-                    # --- MSG ---
+                    mfi = calculate_mfi(main["df"])
+                    vwap_st = check_vwap_status(main["df"])
+                    trade_plan = generate_trade_plan(main['c'], 'SHORT', main['atr'])
+                    fvg = find_nearest_fvg(main["df"], "SHORT")
+                    past_res = check_past_trade(main["df"], main["h_idx"][-2], "SHORT", main["atr"])
+
                     msg = (f"{header}\n⚔️ **CHIP WAR ({s1} vs {s2})**\n\n"
                            f"🚨 **ACTION: SHORT** 📉\n------------------------\n"
                            f"💪 **Strong:** {leader} (HH)\n🛑 **Weak:** {laggard} (LH)\n"
@@ -318,11 +372,13 @@ def scan_smt_for_set(set_key, timeframe, market_status, market_change):
                            f"🎲 {markov}\n🌊 {hurst}\n{cycle}\n"
                            f"========================\n"
                            f"🏦 **INSTITUTIONAL:**\n"
-                           f"📏 {z}\n"
-                           f"{generate_trade_plan(main['c'], 'SHORT', main['atr'])}")
+                           f"📏 {z}\n💸 MFI: {mfi:.0f}\n⚖️ {vwap_st}\n"
+                           f"========================\n"
+                           f"📊 **QUANT:**\n🌪️ VIX: {vix_msg}\n🧲 FVG: {fvg}\n"
+                           f"🔙 **PREV:** {past_res}\n{trade_plan}")
                     send_telegram(msg)
             
-            # LONG CHECK (Benzer Mantık)
+            # LONG CHECK
             if (d1["last"]-d1["l_idx"][-1] <= FRESHNESS_LIMIT) and (d2["last"]-d2["l_idx"][-1] <= FRESHNESS_LIMIT):
                 leader = s1 if d1["l"].iloc[-1] < d1["l"].iloc[-2] and d2["l"].iloc[-1] > d2["l"].iloc[-2] else \
                          s2 if d2["l"].iloc[-1] < d2["l"].iloc[-2] and d1["l"].iloc[-1] > d1["l"].iloc[-2] else None
@@ -335,6 +391,11 @@ def scan_smt_for_set(set_key, timeframe, market_status, market_change):
                     markov = calculate_markov_prob(main["df"])
                     cycle = calculate_fft_cycle(main["df"])
                     z = calculate_z_score(main["df"])
+                    mfi = calculate_mfi(main["df"])
+                    vwap_st = check_vwap_status(main["df"])
+                    trade_plan = generate_trade_plan(main['c'], 'LONG', main['atr'])
+                    fvg = find_nearest_fvg(main["df"], "LONG")
+                    past_res = check_past_trade(main["df"], main["l_idx"][-2], "LONG", main["atr"])
 
                     msg = (f"{header}\n⚔️ **CHIP WAR ({s1} vs {s2})**\n\n"
                            f"🚨 **ACTION: LONG** 🚀\n------------------------\n"
@@ -345,8 +406,10 @@ def scan_smt_for_set(set_key, timeframe, market_status, market_change):
                            f"🎲 {markov}\n🌊 {hurst}\n{cycle}\n"
                            f"========================\n"
                            f"🏦 **INSTITUTIONAL:**\n"
-                           f"📏 {z}\n"
-                           f"{generate_trade_plan(main['c'], 'LONG', main['atr'])}")
+                           f"📏 {z}\n💸 MFI: {mfi:.0f}\n⚖️ {vwap_st}\n"
+                           f"========================\n"
+                           f"📊 **QUANT:**\n🌪️ VIX: {vix_msg}\n🧲 FVG: {fvg}\n"
+                           f"🔙 **PREV:** {past_res}\n{trade_plan}")
                     send_telegram(msg)
 
     else: # STANDARD MODE
@@ -360,12 +423,14 @@ def scan_smt_for_set(set_key, timeframe, market_status, market_change):
         rsi = calculate_rsi(df['Close'])
         data_ref = {"l":l, "h":h, "l_idx":l_idx, "h_idx":h_idx, "c":safe_float(df['Close'].iloc[-1]), "last":len(df)-1}
         
-        # MATH & QUANT
+        # MATH & QUANT (Safe Calls)
         hurst = calculate_hurst(df)
         markov = calculate_markov_prob(df)
         cycle = calculate_fft_cycle(df)
         z = calculate_z_score(df)
         mfi = calculate_mfi(df)
+        vwap_st = check_vwap_status(df)
+        vix_msg = get_vix_sentiment()
         
         comps = config["comps"]
         divs_short, divs_long = [], []
@@ -378,7 +443,6 @@ def scan_smt_for_set(set_key, timeframe, market_status, market_change):
                 if data_ref["h"].iloc[-1] > data_ref["h"].iloc[-2] and hc.iloc[-1] < hc.iloc[-2]: divs_short.append(c)
                 if data_ref["l"].iloc[-1] < data_ref["l"].iloc[-2] and lc.iloc[-1] > lc.iloc[-2]: divs_long.append(c)
 
-        # SEND MESSAGES
         # SHORT
         if divs_short and (data_ref["last"] - data_ref["h_idx"][-1] <= FRESHNESS_LIMIT):
             rsi_val = safe_float(rsi.iloc[data_ref["h_idx"][-1]])
@@ -386,6 +450,9 @@ def scan_smt_for_set(set_key, timeframe, market_status, market_change):
             is_div = rsi_val < prev_rsi
             icon = "💣" if is_div else "⚡"
             
+            fvg = find_nearest_fvg(df, "SHORT")
+            past_res = check_past_trade(df, h_idx[-2], "SHORT", atr)
+
             msg = (f"{header}\n{icon} **{config['name']} SHORT**\n\n"
                    f"🚨 **ACTION: SHORT** 📉\n------------------------\n"
                    f"📉 **Leader:** {ref} (HH)\n🛑 **Laggard:** {', '.join(divs_short)}\n"
@@ -395,8 +462,10 @@ def scan_smt_for_set(set_key, timeframe, market_status, market_change):
                    f"🎲 {markov}\n🌊 {hurst}\n{cycle}\n"
                    f"========================\n"
                    f"🏦 **INSTITUTIONAL:**\n"
-                   f"📏 {z}\n💸 **MFI:** {mfi:.0f}\n"
-                   f"{generate_trade_plan(data_ref['c'], 'SHORT', atr)}")
+                   f"📏 {z}\n💸 MFI: {mfi:.0f}\n⚖️ {vwap_st}\n"
+                   f"========================\n"
+                   f"📊 **QUANT:**\n🌪️ VIX: {vix_msg}\n🧲 FVG: {fvg}\n"
+                   f"🔙 **PREV:** {past_res}\n{generate_trade_plan(data_ref['c'], 'SHORT', atr)}")
             send_telegram(msg)
 
         # LONG
@@ -405,6 +474,9 @@ def scan_smt_for_set(set_key, timeframe, market_status, market_change):
             prev_rsi = safe_float(rsi.iloc[data_ref["l_idx"][-2]])
             is_div = rsi_val > prev_rsi
             icon = "🚀" if is_div else "⚡"
+            
+            fvg = find_nearest_fvg(df, "LONG")
+            past_res = check_past_trade(df, l_idx[-2], "LONG", atr)
             
             msg = (f"{header}\n{icon} **{config['name']} LONG**\n\n"
                    f"🚨 **ACTION: LONG** 🚀\n------------------------\n"
@@ -415,8 +487,10 @@ def scan_smt_for_set(set_key, timeframe, market_status, market_change):
                    f"🎲 {markov}\n🌊 {hurst}\n{cycle}\n"
                    f"========================\n"
                    f"🏦 **INSTITUTIONAL:**\n"
-                   f"📏 {z}\n💸 **MFI:** {mfi:.0f}\n"
-                   f"{generate_trade_plan(data_ref['c'], 'LONG', atr)}")
+                   f"📏 {z}\n💸 MFI: {mfi:.0f}\n⚖️ {vwap_st}\n"
+                   f"========================\n"
+                   f"📊 **QUANT:**\n🌪️ VIX: {vix_msg}\n🧲 FVG: {fvg}\n"
+                   f"🔙 **PREV:** {past_res}\n{generate_trade_plan(data_ref['c'], 'LONG', atr)}")
             send_telegram(msg)
 
 if __name__ == "__main__":
@@ -425,16 +499,17 @@ if __name__ == "__main__":
         send_system_ok_message()
         m_pct, m_stat, m_prc = analyze_market_regime()
         if m_stat != "NO_DATA":
-            for s in SMT_CONFIG:
-                try: scan_smt_for_set(s, TF_SCALP, m_stat, m_pct)
-                except: pass
-                try: scan_smt_for_set(s, TF_SWING, m_stat, m_pct)
-                except: pass
+            strats = ["SET_1", "SET_2", "SET_3", "SET_4"]
             if is_opening_range():
-                for s in SMT_CONFIG:
+                for s in strats: 
                     try: scan_smt_for_set(s, TF_MICRO, m_stat, m_pct)
+                    except: pass
+            for s in strats:
+                for tf in [TF_SCALP, TF_SWING]:
+                    try: scan_smt_for_set(s, tf, m_stat, m_pct)
                     except: pass
         print(">>> Loop Finished.")
     except Exception as e:
         print(f"CRITICAL: {e}")
+        traceback.print_exc()
         sys.exit(1)
