@@ -25,14 +25,14 @@ try:
 
     # --- SMT CONFIGURATION ---
     SMT_CONFIG = {
-        # SET 1: TQQQ TRIO (Klasik)
+        # SET 1: TQQQ TRIO
         "SET_1": {
             "type": "standard",
             "name": "🔥 TQQQ TRIO",
             "ref": "TQQQ", 
             "comps": ["SOXL", "NVDA"] 
         },
-        # SET 2: TQQQ DUO (Klasik)
+        # SET 2: TQQQ DUO
         "SET_2": {
             "type": "standard",
             "name": "⚖️ TQQQ SEMI DUO",
@@ -44,15 +44,6 @@ try:
             "type": "cluster",
             "name": "⚔️ CHIP WARS (Matrix)",
             "peers": ["NVDA", "AVGO", "MU"] 
-        },
-        # SET 4: SECTOR X-RAY (YENİ - ETF ANALİZİ)
-        # TQQQ Yükselirken Alt Sektörler (XLK, XLC, XLY, SMH) Destekliyor mu?
-        "SET_4": {
-            "type": "standard", # Lider: TQQQ
-            "name": "🏥 SECTOR X-RAY",
-            "ref": "TQQQ",
-            # Teknoloji, İletişim, Tüketim, Yarı İletken
-            "comps": ["XLK", "XLC", "XLY", "SMH"] 
         }
     }
 
@@ -89,7 +80,7 @@ try:
         msg = (f"🟢 **SYSTEM OPERATIONAL** 🟢\n"
                f"🕒 NY Time: `{now.strftime('%H:%M')}`\n"
                f"✅ Bot: Active\n"
-               f"📡 Mode: SECTOR X-RAY ADDED")
+               f"🧠 Brain: QUANT LAYER ACTIVATED")
         send_telegram(msg)
 
     # --- HELPERS ---
@@ -98,6 +89,98 @@ try:
             if isinstance(val, pd.Series): return float(val.iloc[0])
             return float(val)
         except: return 0.0
+
+    # ==========================================
+    # 🧠 QUANT LAYER (YENİ ANALİZ MODÜLLERİ)
+    # ==========================================
+
+    # 1. ATR HESAPLAYICI (Risk Yönetimi)
+    def calculate_atr(df, period=14):
+        high_low = df['High'] - df['Low']
+        high_close = np.abs(df['High'] - df['Close'].shift())
+        low_close = np.abs(df['Low'] - df['Close'].shift())
+        ranges = pd.concat([high_low, high_close, low_close], axis=1)
+        true_range = ranges.max(axis=1)
+        atr = true_range.rolling(period).mean().iloc[-1]
+        return safe_float(atr)
+
+    # 2. VIX KORKU ENDEKSİ (Piyasa Filtresi)
+    def get_vix_sentiment():
+        try:
+            vix = yf.download("^VIX", period="2d", interval="1d", progress=False)
+            if len(vix) < 1: return "N/A"
+            current_vix = safe_float(vix['Close'].iloc[-1])
+            
+            # Yorumlama
+            if current_vix > 25: return f"🌪️ **EXTREME FEAR ({current_vix:.2f})** - Caution!"
+            elif current_vix > 18: return f"⚠️ **High Volatility ({current_vix:.2f})**"
+            else: return f"🌊 **Calm ({current_vix:.2f})** - Safe"
+        except: return "N/A"
+
+    # 3. FVG DEDEKTÖRÜ (Adil Değer Boşluğu)
+    def find_nearest_fvg(df, direction):
+        # direction: "SHORT" (Look for Bearish FVG below), "LONG" (Look for Bullish FVG above)
+        # Basit FVG Mantığı: 3 mumluk yapı.
+        try:
+            closes = df['Close'].values
+            highs = df['High'].values
+            lows = df['Low'].values
+            
+            fvg_price = 0
+            fvg_dist = 99999
+            current_price = closes[-1]
+
+            # Son 20 muma bak
+            for i in range(len(closes)-2, len(closes)-20, -1):
+                # BEARISH FVG (Gap Down) -> Low[i] > High[i+2]
+                if direction == "SHORT":
+                    if lows[i] > highs[i+2]:
+                        # Gap bulundu. Fiyatın altında mı?
+                        gap_mid = (lows[i] + highs[i+2]) / 2
+                        if gap_mid < current_price:
+                            dist = current_price - gap_mid
+                            if dist < fvg_dist:
+                                fvg_dist = dist
+                                fvg_price = gap_mid
+
+                # BULLISH FVG (Gap Up) -> High[i] < Low[i+2]
+                elif direction == "LONG":
+                    if highs[i] < lows[i+2]:
+                        # Gap bulundu. Fiyatın üstünde mi?
+                        gap_mid = (highs[i] + lows[i+2]) / 2
+                        if gap_mid > current_price:
+                            dist = gap_mid - current_price
+                            if dist < fvg_dist:
+                                fvg_dist = dist
+                                fvg_price = gap_mid
+            
+            if fvg_price != 0: return f"${fvg_price:.2f}"
+            else: return "None Nearby"
+        except: return "Calc Error"
+
+    # 4. TRADE PLAN OLUŞTURUCU (Quant Raporu)
+    def generate_trade_plan(price, direction, atr):
+        if atr == 0: return "Data Error"
+        
+        # Risk Yönetimi Kuralları
+        # Stop Loss: 1.5 ATR
+        # Take Profit: 2.0 Risk (1:2 RR)
+        
+        if direction == "SHORT":
+            stop_loss = price + (atr * 1.5)
+            take_profit = price - (atr * 3.0) # 1:2 Oran
+            risk = stop_loss - price
+        else: # LONG
+            stop_loss = price - (atr * 1.5)
+            take_profit = price + (atr * 3.0)
+            risk = price - stop_loss
+
+        return (f"🛡️ **Risk Plan (ATR Based):**\n"
+                f"   🛑 **Stop:** {stop_loss:.2f}\n"
+                f"   💰 **Target:** {take_profit:.2f}\n"
+                f"   ⚖️ **Risk:** ${risk:.2f} per share")
+
+    # ==========================================
 
     # --- RSI CALCULATOR ---
     def calculate_rsi(series, period=14):
@@ -165,20 +248,28 @@ try:
         if is_opening_range(): time_header = "🌅 **OPENING RANGE SNIPER**"
         else: time_header = "⚡ **INTRADAY SCAN**"
 
-        # --- LOGIC A: CLUSTER MODE (HİSSE MATRIX - AYNI) ---
+        # --- LOGIC A: CLUSTER MODE (HİSSE MATRIX) ---
         if strategy_type == "cluster":
             peers = config["peers"]
             peer_data = {}
+            # VIX VERİSİ ÇEK (Sadece 1 kez)
+            vix_msg = get_vix_sentiment()
+            
             for p in peers:
                 df = get_data(p, timeframe)
                 if df is None: continue
                 l, h, l_idx, h_idx = find_swings(df, order)
                 if l is not None:
+                    # ATR Hesapla
+                    atr_val = calculate_atr(df)
                     peer_data[p] = {
                         "L_new": safe_float(l.iloc[-1]), "L_old": safe_float(l.iloc[-2]),
                         "H_new": safe_float(h.iloc[-1]), "H_old": safe_float(h.iloc[-2]),
                         "H_idx": h_idx[-1], "L_idx": l_idx[-1],
-                        "Last_Bar": len(df) - 1
+                        "Close": safe_float(df['Close'].iloc[-1]),
+                        "ATR": atr_val,
+                        "Last_Bar": len(df) - 1,
+                        "DF": df # FVG için dataframe sakla
                     }
             
             if len(peer_data) < 2: return
@@ -186,44 +277,75 @@ try:
             for s1, s2 in combinations(peer_data.keys(), 2):
                 d1, d2 = peer_data[s1], peer_data[s2]
                 
-                # Bearish
+                # BEARISH CLUSTER
+                is_bearish = False
+                leader, laggard = "", ""
+                
                 if d1["H_new"] > d1["H_old"] and d2["H_new"] < d2["H_old"]:
                     if (d1["Last_Bar"] - d1["H_idx"] <= FRESHNESS_LIMIT):
-                        msg = (f"{time_header}\n⚔️ **CHIP WAR ({s1} vs {s2})**\n\n"
-                               f"🚨 **ACTION: SHORT** 📉\n"
-                               f"------------------------\n"
-                               f"💪 **Strong:** {s1} (HH)\n🛑 **Weak:** {s2} (LH)\n"
-                               f"⏱️ **TF:** {timeframe}\n🧠 Divergence in Sector")
-                        send_telegram(msg)
+                        is_bearish = True
+                        leader, laggard = s1, s2
                 elif d2["H_new"] > d2["H_old"] and d1["H_new"] < d1["H_old"]:
                     if (d2["Last_Bar"] - d2["H_idx"] <= FRESHNESS_LIMIT):
-                        msg = (f"{time_header}\n⚔️ **CHIP WAR ({s2} vs {s1})**\n\n"
-                               f"🚨 **ACTION: SHORT** 📉\n"
-                               f"------------------------\n"
-                               f"💪 **Strong:** {s2} (HH)\n🛑 **Weak:** {s1} (LH)\n"
-                               f"⏱️ **TF:** {timeframe}\n🧠 Divergence in Sector")
-                        send_telegram(msg)
+                        is_bearish = True
+                        leader, laggard = s2, s1
                 
-                # Bullish
+                if is_bearish:
+                    # QUANT ANALİZİ HAZIRLA
+                    # Lider hisse üzerinden hesaplama yapıyoruz
+                    main_data = peer_data[leader]
+                    trade_plan = generate_trade_plan(main_data["Close"], "SHORT", main_data["ATR"])
+                    fvg_target = find_nearest_fvg(main_data["DF"], "SHORT")
+
+                    msg = (f"{time_header}\n"
+                           f"⚔️ **CHIP WAR ({s1} vs {s2})**\n\n"
+                           f"🚨 **ACTION: SHORT** 📉\n"
+                           f"------------------------\n"
+                           f"💪 **Strong:** {leader} (HH)\n"
+                           f"🛑 **Weak:** {laggard} (LH)\n"
+                           f"⏱️ **TF:** {timeframe}\n"
+                           f"🧠 **Reason:** Bearish Divergence\n"
+                           f"========================\n"
+                           f"📊 **QUANT INSIGHTS:**\n"
+                           f"🌪️ **VIX:** {vix_msg}\n"
+                           f"🧲 **Magnet FVG:** {fvg_target}\n"
+                           f"{trade_plan}")
+                    send_telegram(msg)
+
+                # BULLISH CLUSTER
+                is_bullish = False
                 if d1["L_new"] < d1["L_old"] and d2["L_new"] > d2["L_old"]:
                     if (d1["Last_Bar"] - d1["L_idx"] <= FRESHNESS_LIMIT):
-                        msg = (f"{time_header}\n⚔️ **CHIP WAR ({s1} vs {s2})**\n\n"
-                               f"🚨 **ACTION: LONG** 🚀\n"
-                               f"------------------------\n"
-                               f"📉 **Sweeping:** {s1} (LL)\n🛡️ **Holding:** {s2} (HL)\n"
-                               f"⏱️ **TF:** {timeframe}\n🧠 Divergence in Sector")
-                        send_telegram(msg)
+                        is_bullish = True
+                        leader, laggard = s1, s2
                 elif d2["L_new"] < d2["L_old"] and d1["L_new"] > d1["L_old"]:
                     if (d2["Last_Bar"] - d2["L_idx"] <= FRESHNESS_LIMIT):
-                        msg = (f"{time_header}\n⚔️ **CHIP WAR ({s2} vs {s1})**\n\n"
-                               f"🚨 **ACTION: LONG** 🚀\n"
-                               f"------------------------\n"
-                               f"📉 **Sweeping:** {s2} (LL)\n🛡️ **Holding:** {s1} (HL)\n"
-                               f"⏱️ **TF:** {timeframe}\n🧠 Divergence in Sector")
-                        send_telegram(msg)
+                        is_bullish = True
+                        leader, laggard = s2, s1
+                
+                if is_bullish:
+                    # QUANT ANALİZİ
+                    main_data = peer_data[leader]
+                    trade_plan = generate_trade_plan(main_data["Close"], "LONG", main_data["ATR"])
+                    fvg_target = find_nearest_fvg(main_data["DF"], "LONG")
+
+                    msg = (f"{time_header}\n"
+                           f"⚔️ **CHIP WAR ({s1} vs {s2})**\n\n"
+                           f"🚨 **ACTION: LONG** 🚀\n"
+                           f"------------------------\n"
+                           f"📉 **Sweeping:** {leader} (LL)\n"
+                           f"🛡️ **Holding:** {laggard} (HL)\n"
+                           f"⏱️ **TF:** {timeframe}\n"
+                           f"🧠 **Reason:** Bullish Divergence\n"
+                           f"========================\n"
+                           f"📊 **QUANT INSIGHTS:**\n"
+                           f"🌪️ **VIX:** {vix_msg}\n"
+                           f"🧲 **Magnet FVG:** {fvg_target}\n"
+                           f"{trade_plan}")
+                    send_telegram(msg)
 
 
-        # --- LOGIC B: STANDARD MODE (TQQQ/SECTOR X-RAY) ---
+        # --- LOGIC B: STANDARD MODE (TQQQ/ETF) ---
         else:
             ref_ticker = config["ref"]
             comp_tickers = config["comps"]
@@ -231,14 +353,17 @@ try:
             df_ref = get_data(ref_ticker, timeframe)
             if df_ref is None: return
             
+            # 1. RSI & ATR Hesapla
             rsi_series = calculate_rsi(df_ref['Close'])
+            atr_val = calculate_atr(df_ref)
+            vix_msg = get_vix_sentiment()
             
             l, h, l_idx, h_idx = find_swings(df_ref, order)
             if l is None: return
 
             last_candle_idx = len(df_ref) - 1
             
-            # Get RSI at Swing Points
+            # RSI Değerleri
             try:
                 rsi_new_high = safe_float(rsi_series.iloc[h_idx[-1]])
                 rsi_old_high = safe_float(rsi_series.iloc[h_idx[-2]])
@@ -269,7 +394,7 @@ try:
                         }
                     except: continue
 
-            # --- BEARISH SMT CHECK ---
+            # --- BEARISH CHECK (SHORT) ---
             if data_store["REF"]["H_new"] > data_store["REF"]["H_old"]:
                 bars_ago = last_candle_idx - data_store["REF"]["H_idx"]
                 if bars_ago <= FRESHNESS_LIMIT:
@@ -288,19 +413,28 @@ try:
                         else:
                             final_header = f"⚡ **STANDARD SMT**"
                             rsi_msg = f"RSI: {rsi_new_high:.0f} (No Div)"
-                            comment = "Asset Divergence"
+                            comment = "Trend Exhaustion"
+
+                        # QUANT VERİLERİNİ HAZIRLA
+                        trade_plan = generate_trade_plan(data_store["REF"]["Price"], "SHORT", atr_val)
+                        fvg_target = find_nearest_fvg(df_ref, "SHORT")
 
                         msg = (f"{time_header}\n{final_header}\n\n"
                                f"🚨 **ACTION: SHORT** 📉\n"
                                f"------------------------\n"
                                f"📉 **Leader:** {ref_ticker} HH\n"
-                               f"🛑 **Weak Sectors:** {', '.join(divs)}\n"
+                               f"🛑 **Laggard:** {', '.join(divs)}\n"
                                f"🔋 **Momentum:** {rsi_msg}\n"
                                f"🕯️ **Freshness:** {bars_ago} bars\n"
-                               f"🧠 {comment}\nPrice: {data_store['REF']['Price']:.2f}")
+                               f"🧠 {comment}\nPrice: {data_store['REF']['Price']:.2f}\n"
+                               f"========================\n"
+                               f"📊 **QUANT INSIGHTS:**\n"
+                               f"🌪️ **VIX:** {vix_msg}\n"
+                               f"🧲 **Magnet FVG:** {fvg_target}\n"
+                               f"{trade_plan}")
                         send_telegram(msg)
 
-            # --- BULLISH SMT CHECK ---
+            # --- BULLISH CHECK (LONG) ---
             elif data_store["REF"]["L_new"] < data_store["REF"]["L_old"]:
                 bars_ago = last_candle_idx - data_store["REF"]["L_idx"]
                 if bars_ago <= FRESHNESS_LIMIT:
@@ -319,16 +453,25 @@ try:
                         else:
                             final_header = f"⚡ **STANDARD SMT**"
                             rsi_msg = f"RSI: {rsi_new_low:.0f} (No Div)"
-                            comment = "Asset Divergence"
+                            comment = "Trend Reversal"
+
+                        # QUANT VERİLERİNİ HAZIRLA
+                        trade_plan = generate_trade_plan(data_store["REF"]["Price"], "LONG", atr_val)
+                        fvg_target = find_nearest_fvg(df_ref, "LONG")
 
                         msg = (f"{time_header}\n{final_header}\n\n"
                                f"🚨 **ACTION: LONG** 🚀\n"
                                f"------------------------\n"
                                f"📈 **Leader:** {ref_ticker} LL\n"
-                               f"💪 **Holding Sectors:** {', '.join(divs)}\n"
+                               f"💪 **Holding:** {', '.join(divs)}\n"
                                f"🔋 **Momentum:** {rsi_msg}\n"
                                f"🕯️ **Freshness:** {bars_ago} bars\n"
-                               f"🧠 {comment}\nPrice: {data_store['REF']['Price']:.2f}")
+                               f"🧠 {comment}\nPrice: {data_store['REF']['Price']:.2f}\n"
+                               f"========================\n"
+                               f"📊 **QUANT INSIGHTS:**\n"
+                               f"🌪️ **VIX:** {vix_msg}\n"
+                               f"🧲 **Magnet FVG:** {fvg_target}\n"
+                               f"{trade_plan}")
                         send_telegram(msg)
 
     # --- MAIN ---
@@ -338,7 +481,7 @@ try:
         m_change, m_status, m_price = analyze_market_regime()
         
         if m_status != "NO_DATA":
-            strategies = ["SET_1", "SET_2", "SET_3", "SET_4"]
+            strategies = ["SET_1", "SET_2", "SET_3"]
             
             if is_opening_range():
                 print(">>> Opening Range Scan...")
