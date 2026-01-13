@@ -28,7 +28,13 @@ SMT_CONFIG = {
     "SET_1": {"type": "standard", "name": "🔥 TQQQ TRIO", "ref": "TQQQ", "comps": ["SOXL", "NVDA"]},
     "SET_2": {"type": "standard", "name": "⚖️ TQQQ SEMI DUO", "ref": "TQQQ", "comps": ["SOXL"]},
     "SET_3": {"type": "cluster", "name": "⚔️ CHIP WARS (Matrix)", "peers": ["NVDA", "AVGO", "MU"]},
-    "SET_4": {"type": "standard", "name": "🏥 SECTOR X-RAY", "ref": "TQQQ", "comps": ["XLK", "XLC", "XLY", "SMH"]}
+    "SET_4": {"type": "standard", "name": "🏥 SECTOR X-RAY", "ref": "TQQQ", "comps": ["XLK", "XLC", "XLY", "SMH"]},
+    # YENİ EKLENEN X-9191 MODÜLÜ
+    "SET_X9191": {
+        "type": "cluster", # Cluster (Matrix) mantığıyla çalışsın ki hepsi birbirini kontrol etsin
+        "name": "👽 PROTOCOL X-9191",
+        "peers": ["TQQQ", "XLK", "SMH"] 
+    }
 }
 
 # Timeframes
@@ -66,7 +72,7 @@ def send_system_ok_message():
     msg = (f"🟢 **SYSTEM OPERATIONAL** 🟢\n"
            f"🕒 NY Time: `{now.strftime('%H:%M')}`\n"
            f"✅ Bot: Active\n"
-           f"🛡️ Mode: TREND FILTER (Risky Alert)")
+           f"👽 Module: X-9191 LOADED")
     send_telegram(msg)
 
 def safe_float(val):
@@ -285,13 +291,13 @@ def scan_smt_for_set(set_key, timeframe, market_status, market_change):
             df = get_data(p, timeframe)
             if df is None: continue
             
-            # Trend Bias (Hisse bazlı)
+            # Trend Bias Check
             trend_bias = check_trend_bias(df)
             
             l, h, l_idx, h_idx = find_swings(df, 2 if timeframe=="5m" else 3)
             if l is not None:
                 atr = calculate_atr(df)
-                data[p] = {"df":df, "l":l, "h":h, "l_idx":l_idx, "h_idx":h_idx, "atr":atr, "last":len(df)-1, "c":safe_float(df['Close'].iloc[-1]), "bias":trend_bias}
+                data[p] = {"df":df, "l":l, "h":h, "l_idx":l_idx, "h_idx":h_idx, "atr":atr, "last":len(df)-1, "c":safe_float(df['Close'].iloc[-1]), "bias": trend_bias}
         
         if len(data) < 2: return
         for s1, s2 in combinations(data.keys(), 2):
@@ -306,7 +312,6 @@ def scan_smt_for_set(set_key, timeframe, market_status, market_change):
                     laggard = s2 if leader == s1 else s1
                     main = data[leader]
                     
-                    # RISKY CHECK
                     if main["bias"] == "BULLISH":
                         action_txt = "🚨 **ACTION: SHORT (⚠️ RISKY)** 📉"
                         trend_txt = "⚠️ Counter-Trend (Uptrend)"
@@ -324,7 +329,7 @@ def scan_smt_for_set(set_key, timeframe, market_status, market_change):
                     fvg = find_nearest_fvg(main["df"], "SHORT")
                     past_res = check_past_trade(main["df"], main["h_idx"][-2], "SHORT", main["atr"])
 
-                    msg = (f"{header}\n⚔️ **CHIP WAR ({s1} vs {s2})**\n\n"
+                    msg = (f"{header}\n{config['name']} ({s1} vs {s2})\n\n"
                            f"{action_txt}\n------------------------\n"
                            f"🛡️ **Status:** {trend_txt}\n"
                            f"💪 **Strong:** {leader} (HH)\n🛑 **Weak:** {laggard} (LH)\n"
@@ -349,7 +354,6 @@ def scan_smt_for_set(set_key, timeframe, market_status, market_change):
                     laggard = s2 if leader == s1 else s1
                     main = data[leader]
 
-                    # RISKY CHECK
                     if main["bias"] == "BEARISH":
                         action_txt = "🚨 **ACTION: LONG (⚠️ RISKY)** 🚀"
                         trend_txt = "⚠️ Counter-Trend (Downtrend)"
@@ -367,7 +371,7 @@ def scan_smt_for_set(set_key, timeframe, market_status, market_change):
                     fvg = find_nearest_fvg(main["df"], "LONG")
                     past_res = check_past_trade(main["df"], main["l_idx"][-2], "LONG", main["atr"])
 
-                    msg = (f"{header}\n⚔️ **CHIP WAR ({s1} vs {s2})**\n\n"
+                    msg = (f"{header}\n{config['name']} ({s1} vs {s2})\n\n"
                            f"{action_txt}\n------------------------\n"
                            f"🛡️ **Status:** {trend_txt}\n"
                            f"📉 **Sweeping:** {leader} (LL)\n🛡️ **Holding:** {laggard} (HL)\n"
@@ -417,7 +421,6 @@ def scan_smt_for_set(set_key, timeframe, market_status, market_change):
 
         # SHORT
         if divs_short and (data_ref["last"] - data_ref["h_idx"][-1] <= FRESHNESS_LIMIT):
-            # RISKY CHECK
             if trend_bias == "BULLISH":
                 action_txt = "🚨 **ACTION: SHORT (⚠️ RISKY)** 📉"
                 trend_txt = "⚠️ Counter-Trend (Uptrend)"
@@ -450,7 +453,6 @@ def scan_smt_for_set(set_key, timeframe, market_status, market_change):
 
         # LONG
         if divs_long and (data_ref["last"] - data_ref["l_idx"][-1] <= FRESHNESS_LIMIT):
-            # RISKY CHECK
             if trend_bias == "BEARISH":
                 action_txt = "🚨 **ACTION: LONG (⚠️ RISKY)** 🚀"
                 trend_txt = "⚠️ Counter-Trend (Downtrend)"
@@ -487,7 +489,7 @@ if __name__ == "__main__":
         send_system_ok_message()
         m_pct, m_stat, m_prc = analyze_market_regime()
         if m_stat != "NO_DATA":
-            strats = ["SET_1", "SET_2", "SET_3", "SET_4"]
+            strats = ["SET_1", "SET_2", "SET_3", "SET_4", "SET_X9191"]
             if is_opening_range():
                 for s in strats: 
                     try: scan_smt_for_set(s, TF_MICRO, m_stat, m_pct)
