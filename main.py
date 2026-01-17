@@ -8,7 +8,7 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 from scipy.signal import argrelextrema
-from datetime import datetime, time as dtime
+from datetime import datetime
 import pytz
 from itertools import combinations
 
@@ -16,20 +16,17 @@ from itertools import combinations
 CURRENT_FILTER = "ALL"
 LAST_UPDATE_ID = 0
 SENT_MESSAGES = {} 
+LAST_SCAN_TIME = 0  
+SCAN_INTERVAL = 300 # 5 Dakika (300 saniye)
 
 # --- SETTINGS ---
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
 
-# --- MONEY MANAGEMENT ---
-ACCOUNT_SIZE = 100000
-RISK_AMOUNT = 1000
-REWARD_RATIO = 2.0
-
 # --- DATA RULES ---
-STATS_DATA_PERIOD = "1y" # Kayıtlı tercihin: Her zaman 1 yıllık veri
+STATS_DATA_PERIOD = "1y" # Kayıtlı tercihin: 1 yıllık veri üzerinden hesaplar
 
-# --- SMT CONFIGURATION ---
+# --- SMT CONFIGURATION (ORİJİNAL) ---
 SMT_CONFIG = {
     "SET_1": {"type": "standard", "name": "🔥 TQQQ TRIO", "ref": "TQQQ", "comps": ["SOXL", "NVDA"]},
     "SET_2": {"type": "standard", "name": "⚖️ TQQQ SEMI DUO", "ref": "TQQQ", "comps": ["SOXL"]},
@@ -41,23 +38,19 @@ SMT_CONFIG = {
 TF_MICRO, TF_SCALP, TF_SWING = "5m", "15m", "1h"
 FRESHNESS_LIMIT = 5
 
-# --- TELEGRAM CORE ---
+# --- TELEGRAM CORE (TEMİZLENDİ) ---
 
 def send_telegram(message, cache_key=None):
-    """Spam engelleme mekanizmalı mesaj gönderici"""
     global SENT_MESSAGES
     if not TELEGRAM_TOKEN or not CHAT_ID: return
-    
-    # Eğer bu key ile aynı mesaj zaten atılmışsa, fonksiyonu burada bitir.
-    if cache_key and SENT_MESSAGES.get(cache_key) == message:
-        return 
+    # Hafıza kontrolü: Aynı mesajı tekrar tekrar atma
+    if cache_key and SENT_MESSAGES.get(cache_key) == message: return 
 
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     data = {"chat_id": CHAT_ID, "text": message, "parse_mode": "Markdown"}
     try:
         requests.post(url, data=data, timeout=10)
-        if cache_key:
-            SENT_MESSAGES[cache_key] = message 
+        if cache_key: SENT_MESSAGES[cache_key] = message 
     except: pass
 
 def send_control_panel():
@@ -76,6 +69,7 @@ def send_control_panel():
     except: pass
 
 def check_updates():
+    """Butonları anlık yakalar ama gereksiz mesaj atmaz"""
     global LAST_UPDATE_ID, CURRENT_FILTER
     if not TELEGRAM_TOKEN: return
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
@@ -89,16 +83,18 @@ def check_updates():
                 elif "callback_query" in update:
                     selection = update["callback_query"]["data"]
                     if selection in ["5m", "15m", "1h", "ALL"]:
-                        CURRENT_FILTER = selection
-                        # FOTOĞRAFTAKİ HATANIN ÇÖZÜMÜ: Filtre mesajına cache_key eklendi.
-                        send_telegram(f"⚙️ **FILTER:** {CURRENT_FILTER}", cache_key="filter_status")
+                        # Sadece filtre gerçekten değiştiyse bildirim at
+                        if CURRENT_FILTER != selection:
+                            CURRENT_FILTER = selection
+                            send_telegram(f"⚙️ **FILTER:** {CURRENT_FILTER}", cache_key="filter_status")
                     elif selection == "STATUS":
-                        send_telegram(f"✅ Active\nFilter: {CURRENT_FILTER}\nSignals in Cache: {len(SENT_MESSAGES)}", cache_key="status_msg")
+                        rem = max(0, int(SCAN_INTERVAL - (time.time() - LAST_SCAN_TIME)))
+                        send_telegram(f"✅ Bot Online\nFilter: {CURRENT_FILTER}\nNext Scan in: {rem}s", cache_key="status_msg")
                     requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/answerCallbackQuery", 
                                   data={"callback_query_id": update["callback_query"]["id"]})
     except: pass
 
-# --- MATH & QUANT ENGINE (KORUNDU) ---
+# --- CORE MATH ENGINE (DOKUNULMADI) ---
 
 def get_data(symbol, interval):
     try:
@@ -110,9 +106,10 @@ def get_data(symbol, interval):
 def find_swings(df, order):
     try:
         c = df['Close'].values.flatten()
-        l_idx = argrelextrema(c, np.less_equal, order=order)[0]
-        h_idx = argrelextrema(c, np.greater_equal, order=order)[0]
-        return df.iloc[l_idx]['Close'], df.iloc[h_idx]['Close'], l_idx, h_idx
+        return df.iloc[argrelextrema(c, np.less_equal, order=order)[0]]['Close'], \
+               df.iloc[argrelextrema(c, np.greater_equal, order=order)[0]]['Close'], \
+               argrelextrema(c, np.less_equal, order=order)[0], \
+               argrelextrema(c, np.greater_equal, order=order)[0]
     except: return None, None, None, None
 
 def calculate_hurst(df):
@@ -142,7 +139,6 @@ def calculate_atr(df):
 
 def scan_smt_for_set(set_key, timeframe):
     if CURRENT_FILTER != "ALL" and CURRENT_FILTER != timeframe: return
-
     config = SMT_CONFIG[set_key]
     is_cluster = config.get("type") == "cluster"
     
@@ -161,7 +157,6 @@ def scan_smt_for_set(set_key, timeframe):
             d1, d2 = data[s1], data[s2]
             cache_key = f"sig_{set_key}_{s1}_{s2}_{timeframe}"
             
-            # SHORT CHECK
             if (d1["last"]-d1["h_idx"][-1] <= FRESHNESS_LIMIT) and (d2["last"]-d2["h_idx"][-1] <= FRESHNESS_LIMIT):
                 leader = s1 if d1["h"].iloc[-1] > d1["h"].iloc[-2] and d2["h"].iloc[-1] < d2["h"].iloc[-2] else s2 if d2["h"].iloc[-1] > d2["h"].iloc[-2] and d1["h"].iloc[-1] < d1["h"].iloc[-2] else None
                 if leader:
@@ -170,9 +165,6 @@ def scan_smt_for_set(set_key, timeframe):
                            f"🧠 {calculate_markov_prob(m['df'])} | {calculate_hurst(m['df'])}\n"
                            f"🛑 SL: {m['c'] + 1.5*m['atr']:.2f} | 💰 TP: {m['c'] - 3.0*m['atr']:.2f}")
                     send_telegram(msg, cache_key=cache_key)
-                elif cache_key in SENT_MESSAGES: del SENT_MESSAGES[cache_key]
-            
-            # LONG CHECK
             elif (d1["last"]-d1["l_idx"][-1] <= FRESHNESS_LIMIT) and (d2["last"]-d2["l_idx"][-1] <= FRESHNESS_LIMIT):
                 leader = s1 if d1["l"].iloc[-1] < d1["l"].iloc[-2] and d2["l"].iloc[-1] > d2["l"].iloc[-2] else s2 if d2["l"].iloc[-1] < d2["l"].iloc[-2] and d1["l"].iloc[-1] > d1["l"].iloc[-2] else None
                 if leader:
@@ -181,28 +173,29 @@ def scan_smt_for_set(set_key, timeframe):
                            f"🧠 {calculate_markov_prob(m['df'])} | {calculate_hurst(m['df'])}\n"
                            f"🛑 SL: {m['c'] - 1.5*m['atr']:.2f} | 💰 TP: {m['c'] + 3.0*m['atr']:.2f}")
                     send_telegram(msg, cache_key=cache_key)
-                elif cache_key in SENT_MESSAGES: del SENT_MESSAGES[cache_key]
             else:
                 if cache_key in SENT_MESSAGES: del SENT_MESSAGES[cache_key]
 
-# --- MAIN ---
+# --- MAIN LOOP ---
 
 if __name__ == "__main__":
     send_telegram("🟢 **SYSTEM OPERATIONAL**\n👽 Module: X-9191 ACTIVE", cache_key="boot_msg")
     send_control_panel()
     
     while True:
-        # Önce Telegram komutlarını oku (Buton tıklamaları vb.)
+        # Menü komutlarını her saniye kontrol et
         check_updates()
         
-        # Stratejileri tara
-        for tf in [TF_MICRO, TF_SCALP, TF_SWING]:
-            for s in ["SET_1", "SET_2", "SET_3", "SET_4", "SET_X9191"]:
-                try: 
-                    scan_smt_for_set(s, tf)
-                    # Her strateji arasında kısa bir check_updates ki butonlar takılmasın
-                    check_updates() 
-                except: pass
-        
-        # Döngü sonu bekleme
-        time.sleep(2)
+        # 5 dakikalık periyot kontrolü
+        current_time = time.time()
+        if current_time - LAST_SCAN_TIME >= SCAN_INTERVAL:
+            for tf in [TF_MICRO, TF_SCALP, TF_SWING]:
+                for s in ["SET_1", "SET_2", "SET_3", "SET_4", "SET_X9191"]:
+                    try: 
+                        scan_smt_for_set(s, tf)
+                    except: pass
+                check_updates() # Uzun tarama sırasında menü takılmasın
+            
+            LAST_SCAN_TIME = current_time 
+
+        time.sleep(1)
